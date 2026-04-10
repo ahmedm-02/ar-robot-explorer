@@ -39,19 +39,63 @@ enum ROSConnectionStatus: Equatable {
 }
 
 // ---------------------------------------------------------------------------
+// MARK: - ROSMarker
+// ---------------------------------------------------------------------------
+
+/// Parsed representation of a visualization_msgs/Marker received from rosbridge.
+struct ROSMarker {
+    /// Marker action constants (match visualization_msgs/Marker).
+    enum Action: Int {
+        case add       = 0
+        case delete    = 2
+        case deleteAll = 3
+    }
+
+    /// Marker shape constants (match visualization_msgs/Marker).
+    enum ShapeType: Int {
+        case arrow        = 0
+        case cube         = 1
+        case sphere       = 2
+        case cylinder     = 3
+        case textFacing   = 9
+        case meshResource = 10
+
+        /// Fallback initializer — defaults to sphere for unknown types.
+        init(rosValue: Int) {
+            self = ShapeType(rawValue: rosValue) ?? .sphere
+        }
+    }
+
+    let id: Int
+    let action: Action
+    let shapeType: ShapeType
+    let x: Float
+    let y: Float
+    let z: Float
+    let r: Float
+    let g: Float
+    let b: Float
+    let a: Float
+    let scale: Float
+    let label: String
+    let meshResource: String   // USDZ model name (for meshResource type)
+}
+
+// ---------------------------------------------------------------------------
 // MARK: - ROSBridgeClient
 // ---------------------------------------------------------------------------
 
-/// Connects to a rosbridge_websocket server and subscribes to
-/// `/ar_marker_position` (geometry_msgs/PointStamped).
+/// Connects to a rosbridge_websocket server and subscribes to:
+///   - `/ar_marker_position` (geometry_msgs/PointStamped) — legacy simple markers
+///   - `/ar_markers` (visualization_msgs/Marker) — rich markers with type, color, actions
 ///
 /// Lifecycle:
-///   1. Call `connect(host:port:)` — creates the WebSocket, sends a subscribe
-///      frame, and starts the receive loop.
-///   2. Set `onPosition` to handle incoming point messages.
+///   1. Call `connect(host:port:)` — creates the WebSocket, sends subscribe
+///      frames, and starts the receive loop.
+///   2. Set `onPosition` and/or `onMarker` to handle incoming messages.
 ///   3. Call `disconnect()` to tear down cleanly.
 ///
-/// All `connectionStatus` mutations and `onPosition` calls are dispatched to
+/// All `connectionStatus` mutations and callbacks are dispatched to
 /// the main queue so callers never need to marshal themselves.
 @Observable
 final class ROSBridgeClient {
@@ -65,14 +109,16 @@ final class ROSBridgeClient {
     // MARK: - Callback
 
     /// Called on the **main thread** with (x, y, z) from each PointStamped
-    /// message that arrives on the subscribed topic.
+    /// message that arrives on `/ar_marker_position`.
     var onPosition: ((Float, Float, Float) -> Void)?
+
+    /// Called on the **main thread** with parsed Marker data from
+    /// `/ar_markers` (visualization_msgs/Marker).
+    var onMarker: ((ROSMarker) -> Void)?
 
     // MARK: - Constants
 
     static let defaultPort = 9090
-    private let topic      = "/ar_marker_position"
-    private let msgType    = "geometry_msgs/PointStamped"
 
     // MARK: - Private state
     // @ObservationIgnored keeps these out of @Observable tracking — required
@@ -129,28 +175,30 @@ final class ROSBridgeClient {
         urlSession    = nil
     }
 
-    /// Send the rosbridge v2 "subscribe" operation for our topic.
+    /// Send rosbridge v2 "subscribe" operations for all topics we care about.
     private func sendSubscribe(task: URLSessionWebSocketTask) {
-        let payload: [String: Any] = [
-            "op":    "subscribe",
-            "topic": topic,
-            "type":  msgType
+        let subscriptions: [[String: Any]] = [
+            ["op": "subscribe", "topic": "/ar_marker_position", "type": "geometry_msgs/PointStamped"],
+            ["op": "subscribe", "topic": "/ar_markers",         "type": "visualization_msgs/Marker"],
         ]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
-              let text = String(data: data, encoding: .utf8) else {
-            print("[ROSBridgeClient] Failed to encode subscribe message")
-            return
-        }
 
-        task.send(.string(text)) { [weak self] error in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if let error {
-                    print("[ROSBridgeClient] Subscribe send error: \(error.localizedDescription)")
-                    self.connectionStatus = .error(error.localizedDescription)
-                } else if case .connecting = self.connectionStatus {
-                    // First frame went through → TCP + WS handshake is complete.
-                    self.connectionStatus = .connected
+        for (index, payload) in subscriptions.enumerated() {
+            guard let data = try? JSONSerialization.data(withJSONObject: payload),
+                  let text = String(data: data, encoding: .utf8) else {
+                print("[ROSBridgeClient] Failed to encode subscribe message")
+                continue
+            }
+
+            task.send(.string(text)) { [weak self] error in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    if let error {
+                        print("[ROSBridgeClient] Subscribe send error: \(error.localizedDescription)")
+                        self.connectionStatus = .error(error.localizedDescription)
+                    } else if index == 0, case .connecting = self.connectionStatus {
+                        // First frame went through → TCP + WS handshake is complete.
+                        self.connectionStatus = .connected
+                    }
                 }
             }
         }
@@ -186,8 +234,8 @@ final class ROSBridgeClient {
         }
     }
 
-    /// Decode a WebSocket frame and, if it is a rosbridge publish on our
-    /// topic, extract the PointStamped coordinates and call `onPosition`.
+    /// Decode a WebSocket frame and route it to the appropriate handler
+    /// based on the rosbridge topic.
     private func handleMessage(_ message: URLSessionWebSocketTask.Message) {
         // Normalise to a String — rosbridge always sends UTF-8 JSON text frames,
         // but handle binary frames defensively.
@@ -214,13 +262,27 @@ final class ROSBridgeClient {
             return
         }
 
-        // Only act on publish messages for our specific topic
         guard
-            let op         = json["op"]    as? String, op    == "publish",
-            let msgTopic   = json["topic"] as? String, msgTopic == topic,
-            let msg        = json["msg"]   as? [String: Any],
-            let point      = msg["point"]  as? [String: Any]
+            let op       = json["op"]    as? String, op == "publish",
+            let msgTopic = json["topic"] as? String,
+            let msg      = json["msg"]   as? [String: Any]
         else { return }
+
+        switch msgTopic {
+        case "/ar_marker_position":
+            handlePointStamped(msg)
+        case "/ar_markers":
+            handleVisualizationMarker(msg)
+        default:
+            break
+        }
+    }
+
+    // MARK: - Topic-specific parsers
+
+    /// Parse a geometry_msgs/PointStamped message and call `onPosition`.
+    private func handlePointStamped(_ msg: [String: Any]) {
+        guard let point = msg["point"] as? [String: Any] else { return }
 
         // JSONSerialization returns NSNumber for all JSON numeric types
         // (integer or floating-point), so we use NSNumber → floatValue to
@@ -231,6 +293,50 @@ final class ROSBridgeClient {
 
         DispatchQueue.main.async {
             self.onPosition?(x, y, z)
+        }
+    }
+
+    /// Parse a visualization_msgs/Marker message and call `onMarker`.
+    private func handleVisualizationMarker(_ msg: [String: Any]) {
+        let actionRaw = (msg["action"] as? NSNumber)?.intValue ?? 0
+        guard let action = ROSMarker.Action(rawValue: actionRaw) else { return }
+
+        let id       = (msg["id"] as? NSNumber)?.intValue ?? 0
+        let typeRaw  = (msg["type"] as? NSNumber)?.intValue ?? 2  // default: sphere
+
+        // Position
+        let pose     = msg["pose"] as? [String: Any]
+        let position = pose?["position"] as? [String: Any]
+        let x = (position?["x"] as? NSNumber)?.floatValue ?? 0
+        let y = (position?["y"] as? NSNumber)?.floatValue ?? 0
+        let z = (position?["z"] as? NSNumber)?.floatValue ?? 0
+
+        // Color
+        let color = msg["color"] as? [String: Any]
+        let r = (color?["r"] as? NSNumber)?.floatValue ?? 0
+        let g = (color?["g"] as? NSNumber)?.floatValue ?? 1
+        let b = (color?["b"] as? NSNumber)?.floatValue ?? 0
+        let a = (color?["a"] as? NSNumber)?.floatValue ?? 1
+
+        // Scale (use x component as uniform scale)
+        let scaleObj = msg["scale"] as? [String: Any]
+        let scale    = (scaleObj?["x"] as? NSNumber)?.floatValue ?? 1.0
+
+        // Label and mesh
+        let label        = msg["text"] as? String ?? ""
+        let meshResource = msg["mesh_resource"] as? String ?? ""
+
+        let marker = ROSMarker(
+            id: id, action: action,
+            shapeType: ROSMarker.ShapeType(rosValue: typeRaw),
+            x: x, y: y, z: z,
+            r: r, g: g, b: b, a: a,
+            scale: scale, label: label,
+            meshResource: meshResource
+        )
+
+        DispatchQueue.main.async {
+            self.onMarker?(marker)
         }
     }
 }

@@ -99,6 +99,10 @@ class ARSessionManager {
     @ObservationIgnored
     private var placedAnchors: [AnchorEntity] = []
 
+    /// Maps ROS marker IDs to their anchors, enabling per-ID deletion.
+    @ObservationIgnored
+    private var rosMarkerIDs: [(key: String, anchor: AnchorEntity)] = []
+
     /// The WebSocket server. Started once from ARViewContainer.makeUIView.
     @ObservationIgnored
     private let server = WebSocketServer()
@@ -132,6 +136,7 @@ class ARSessionManager {
             arView.scene.removeAnchor(anchor)
         }
         placedAnchors.removeAll()
+        rosMarkerIDs.removeAll()
         placedCount = 0
     }
 
@@ -157,17 +162,93 @@ class ARSessionManager {
 
     // MARK: - ROS Bridge client
 
-    /// Connect to a rosbridge_websocket server and wire up the position callback
-    /// to place green ROS markers in the scene.  The existing NWListener server
+    /// Connect to a rosbridge_websocket server and wire up callbacks
+    /// for both PointStamped and Marker topics.  The existing NWListener server
     /// keeps running — both input channels work simultaneously.
     func connectToROS(host: String, port: Int = ROSBridgeClient.defaultPort) {
+        // Legacy: /ar_marker_position (PointStamped) → green sphere
         rosBridge.onPosition = { [weak self] x, y, z in
             self?.placeRemoteMarker(x: x, y: y, z: z,
                                     label: "ROS",
                                     color: "green",
-                                    radius: 0.08)  // 8 cm — visually distinct from tap (5 cm) and MacBook (7 cm) markers
+                                    radius: 0.08)
         }
+
+        // New: /ar_markers (visualization_msgs/Marker) → full marker support
+        rosBridge.onMarker = { [weak self] marker in
+            self?.handleROSMarker(marker)
+        }
+
         rosBridge.connect(host: host, port: port)
+    }
+
+    // MARK: - ROS Marker handling
+
+    /// Map a ROSMarker.Action into scene operations.
+    private func handleROSMarker(_ marker: ROSMarker) {
+        switch marker.action {
+        case .add:
+            let anchorCountBefore = placedAnchors.count
+            if marker.shapeType == .meshResource, !marker.meshResource.isEmpty {
+                placeRemoteModel(
+                    x: marker.x, y: marker.y, z: marker.z,
+                    modelName: marker.meshResource,
+                    label: marker.label,
+                    scale: marker.scale
+                )
+            } else {
+                let colorName = closestColorName(r: marker.r, g: marker.g, b: marker.b)
+                placeRemoteMarker(
+                    x: marker.x, y: marker.y, z: marker.z,
+                    label: marker.label,
+                    color: colorName,
+                    radius: 0.07 * marker.scale
+                )
+            }
+            // Track the newly placed anchor by ROS marker ID for deletion
+            if placedAnchors.count > anchorCountBefore,
+               let newAnchor = placedAnchors.last {
+                rosMarkerIDs.append((key: "ros_marker_\(marker.id)", anchor: newAnchor))
+            }
+
+        case .delete:
+            deleteROSMarker(id: marker.id)
+
+        case .deleteAll:
+            clearAllObjects()
+        }
+    }
+
+    /// Delete a specific ROS-placed marker by its ID.
+    private func deleteROSMarker(id: Int) {
+        guard let arView else { return }
+        let key = "ros_marker_\(id)"
+        if let index = rosMarkerIDs.firstIndex(where: { $0.key == key }) {
+            let anchor = rosMarkerIDs[index].anchor
+            arView.scene.removeAnchor(anchor)
+            placedAnchors.removeAll { $0 === anchor }
+            rosMarkerIDs.remove(at: index)
+            placedCount = max(0, placedCount - 1)
+        }
+    }
+
+    /// Best-effort mapping from RGB floats to a named color string.
+    private func closestColorName(r: Float, g: Float, b: Float) -> String {
+        // Simple heuristic: pick the named color with the smallest distance.
+        let candidates: [(String, Float, Float, Float)] = [
+            ("red",    1, 0, 0),    ("green",  0, 1, 0),
+            ("blue",   0.2, 0.4, 1),("yellow", 1, 1, 0),
+            ("orange", 1, 0.5, 0),  ("white",  1, 1, 1),
+            ("cyan",   0, 1, 1),    ("purple", 0.6, 0.2, 1),
+            ("pink",   1, 0.4, 0.7),
+        ]
+        var best = "green"
+        var bestDist: Float = .greatestFiniteMagnitude
+        for (name, cr, cg, cb) in candidates {
+            let d = (r - cr) * (r - cr) + (g - cg) * (g - cg) + (b - cb) * (b - cb)
+            if d < bestDist { bestDist = d; best = name }
+        }
+        return best
     }
 
     /// Disconnect from the rosbridge server.
