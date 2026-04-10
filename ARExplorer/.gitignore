@@ -1,0 +1,26 @@
+# Xcode build output
+build/
+DerivedData/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xcuserstate
+xcuserdata/
+
+# Xcode schemes (keep shared schemes, ignore personal ones)
+*.xcscheme
+!*.xcscheme
+
+# Swift Package Manager
+.build/
+.swiftpm/
+*.resolved
+
+# CocoaPods (not used here, but just in case)
+Pods/
+Podfile.lock
+
+# macOS
+.DS_Store
+*.swp
