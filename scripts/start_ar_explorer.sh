@@ -6,15 +6,30 @@
 # Ctrl+C cleanly shuts down all background processes.
 #
 # Usage:
-#   ./scripts/start_ar_explorer.sh
+#   ./scripts/start_ar_explorer.sh [--apriltag]
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+RUN_APRILTAG=false
+for arg in "$@"; do
+    case "$arg" in
+        --apriltag) RUN_APRILTAG=true ;;
+        -h|--help)
+            echo "Usage: $0 [--apriltag]"
+            echo "  --apriltag   Also launch apriltag_detector.py against the RealSense RGB stream."
+            exit 0
+            ;;
+        *) echo "Unknown argument: $arg" >&2; exit 1 ;;
+    esac
+done
+
 # ── Source ROS 2 ──────────────────────────────────────────────────────────────
 
+set +u
 source /opt/ros/jazzy/setup.bash
+set -u
 
 # ── Gather info ───────────────────────────────────────────────────────────────
 
@@ -95,6 +110,26 @@ if $REALSENSE_CONNECTED; then
     fi
 fi
 
+# ── 4. AprilTag detector (opt-in) ─────────────────────────────────────────────
+
+if $RUN_APRILTAG; then
+    if ! $REALSENSE_CONNECTED; then
+        echo "[apriltag] WARNING: --apriltag requested but RealSense not running; skipping."
+    elif pgrep -f "apriltag_detector.py" > /dev/null 2>&1; then
+        echo "[apriltag] Detector already running."
+    else
+        echo "[apriltag] Starting AprilTag detector (tag36h11)..."
+        python3 "$SCRIPT_DIR/apriltag_detector.py" &
+        PIDS+=($!)
+        sleep 2
+        if kill -0 "${PIDS[-1]}" 2>/dev/null; then
+            echo "[apriltag] Detector running."
+        else
+            echo "[apriltag] WARNING: Detector failed to start (check pupil-apriltags install)."
+        fi
+    fi
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo ""
@@ -114,6 +149,14 @@ echo "  /ar_marker_position                  — geometry_msgs/PointStamped (leg
 if $REALSENSE_CONNECTED; then
 echo "  /camera/camera/color/image_raw       — sensor_msgs/Image (RGB)"
 echo "  /camera/camera/depth/image_rect_raw  — sensor_msgs/Image (depth)"
+fi
+if $RUN_APRILTAG; then
+echo "  /apriltag_detections                 — visualization_msgs/Marker (RViz)"
+echo "  /tf                                  — camera_color_optical_frame → tag_<id>"
+echo ""
+echo "RViz: to visualize AprilTag detections, run: rviz2"
+echo "Then set Fixed Frame to 'camera_color_optical_frame' and add a TF display"
+echo "+ Marker display on /apriltag_detections"
 fi
 echo ""
 echo "Press Ctrl+C to stop all processes."
