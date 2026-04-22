@@ -6,22 +6,33 @@
 # Ctrl+C cleanly shuts down all background processes.
 #
 # Usage:
-#   ./scripts/start_ar_explorer.sh [--apriltag]
+#   ./scripts/start_ar_explorer.sh [--apriltag] [--iphone-stream URL]
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 RUN_APRILTAG=false
-for arg in "$@"; do
-    case "$arg" in
-        --apriltag) RUN_APRILTAG=true ;;
+IPHONE_STREAM_URL=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --apriltag) RUN_APRILTAG=true; shift ;;
+        --iphone-stream)
+            shift
+            IPHONE_STREAM_URL="${1:-}"
+            if [ -z "$IPHONE_STREAM_URL" ]; then
+                echo "ERROR: --iphone-stream requires a URL argument." >&2
+                exit 1
+            fi
+            shift
+            ;;
         -h|--help)
-            echo "Usage: $0 [--apriltag]"
-            echo "  --apriltag   Also launch apriltag_detector.py against the RealSense RGB stream."
+            echo "Usage: $0 [--apriltag] [--iphone-stream URL]"
+            echo "  --apriltag              Also launch apriltag_detector.py against the RealSense RGB stream."
+            echo "  --iphone-stream URL     Launch iphone_apriltag_processor.py consuming the iPhone's MJPEG stream."
             exit 0
             ;;
-        *) echo "Unknown argument: $arg" >&2; exit 1 ;;
+        *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
 
@@ -130,6 +141,24 @@ if $RUN_APRILTAG; then
     fi
 fi
 
+# ── 5. iPhone AprilTag processor (opt-in) ────────────────────────────────────
+
+if [ -n "$IPHONE_STREAM_URL" ]; then
+    if pgrep -f "iphone_apriltag_processor.py" > /dev/null 2>&1; then
+        echo "[iphone-apriltag] Processor already running."
+    else
+        echo "[iphone-apriltag] Starting iPhone AprilTag processor (consuming $IPHONE_STREAM_URL)..."
+        python3 "$SCRIPT_DIR/iphone_apriltag_processor.py" --url "$IPHONE_STREAM_URL" &
+        PIDS+=($!)
+        sleep 2
+        if kill -0 "${PIDS[-1]}" 2>/dev/null; then
+            echo "[iphone-apriltag] iPhone AprilTag processor running."
+        else
+            echo "[iphone-apriltag] WARNING: Processor failed to start."
+        fi
+    fi
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo ""
@@ -157,6 +186,12 @@ echo ""
 echo "RViz: to visualize AprilTag detections, run: rviz2"
 echo "Then set Fixed Frame to 'camera_color_optical_frame' and add a TF display"
 echo "+ Marker display on /apriltag_detections"
+fi
+if [ -n "$IPHONE_STREAM_URL" ]; then
+echo "  /ar_markers (iphone_apriltag ns)     — iPhone-detected tags → green markers"
+echo "  /tf                                  — iphone_camera → iphone_tag_<id>"
+echo ""
+echo "iPhone AprilTag processor:  consuming $IPHONE_STREAM_URL"
 fi
 echo ""
 echo "Press Ctrl+C to stop all processes."

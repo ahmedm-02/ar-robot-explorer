@@ -188,6 +188,9 @@ class ARSessionManager {
     private func handleROSMarker(_ marker: ROSMarker) {
         switch marker.action {
         case .add:
+            // Remove existing marker with this ID to prevent stacking
+            deleteROSMarker(id: marker.id)
+
             let anchorCountBefore = placedAnchors.count
             if marker.shapeType == .meshResource, !marker.meshResource.isEmpty {
                 placeRemoteModel(
