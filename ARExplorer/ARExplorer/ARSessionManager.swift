@@ -11,6 +11,7 @@
 // is therefore safe to call directly from the Coordinator delegate.
 
 import ARKit
+import CoreImage
 import Observation
 import RealityKit
 import SwiftUI
@@ -85,6 +86,9 @@ class ARSessionManager {
     /// "192.168.x.x:8080" — shown in the HUD so you know what to type in the terminal.
     var serverAddress: String = "Starting…"
 
+    /// "192.168.x.x:8082/stream" — MJPEG endpoint the ASUS pulls for AprilTag detection.
+    var mjpegStreamAddress: String = "Starting…"
+
     // MARK: Internal state
     // @ObservationIgnored excludes these from the @Observable macro's tracking —
     // required for `weak var` (which can't be synthesised as a computed property)
@@ -119,6 +123,34 @@ class ARSessionManager {
     /// never changes; ContentView observes ROSBridgeClient's own properties.
     @ObservationIgnored
     let rosBridge = ROSBridgeClient()
+
+    /// MJPEG HTTP server on port 8082 — serves the ARKit camera feed to the ASUS
+    /// for AprilTag detection in shared-frame calibration.
+    @ObservationIgnored
+    private let mjpegServer = MJPEGServer()
+
+    /// Reused CIContext for JPEG encoding. Thread-safe; expensive to create.
+    @ObservationIgnored
+    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+
+    /// Serial background queue for JPEG encoding so we never block the main thread
+    /// (ARKit delegate callbacks land there). Serial keeps frame order intact and
+    /// prevents pile-up if encoding falls behind capture.
+    @ObservationIgnored
+    private let encodeQueue = DispatchQueue(label: "MJPEGEncoder", qos: .userInitiated)
+
+    /// Monotonic timestamp of the last frame we kicked off encoding for. Used to
+    /// throttle the publish rate to ~`mjpegTargetFPS` regardless of ARKit's fps.
+    @ObservationIgnored
+    private var lastEncodeTime: CFTimeInterval = 0
+
+    /// True while a frame is encoding. We skip new frames while it is set so a
+    /// slow encode doesn't queue an unbounded backlog of CVPixelBuffers.
+    @ObservationIgnored
+    private var encodingInFlight: Bool = false
+
+    /// Target output rate matches the RealSense MJPEG stream (12 fps).
+    private let mjpegTargetFPS: Double = 12
 
     // MARK: - Public API
 
@@ -284,6 +316,71 @@ class ARSessionManager {
         }
 
         server.start()
+    }
+
+    // MARK: - MJPEG camera server
+
+    /// Start the MJPEG HTTP server. Called from ARViewContainer.makeUIView.
+    /// Independent of the WebSocket server so the two can fail/restart separately.
+    func startMJPEGServer() {
+        mjpegStreamAddress = "\(WebSocketServer.localIPAddress()):\(mjpegServer.port)/stream"
+        mjpegServer.start()
+    }
+
+    /// Convert an ARKit frame to JPEG and broadcast it to MJPEG clients.
+    /// Called from the ARSessionDelegate on the main thread for every captured frame.
+    /// Throttles to `mjpegTargetFPS`, encodes off-thread, and skips frames if a
+    /// previous encode is still in progress.
+    func pushFrame(_ frame: ARFrame) {
+        guard mjpegServer.hasClients else { return }
+
+        let now = CACurrentMediaTime()
+        let minInterval = 1.0 / mjpegTargetFPS
+        if now - lastEncodeTime < minInterval { return }
+        if encodingInFlight { return }
+        lastEncodeTime = now
+        encodingInFlight = true
+
+        // CVPixelBuffer is reference-counted in Swift, so capturing it in the closure
+        // retains it across the dispatch hop. ARKit's frame buffer pool is bounded;
+        // releasing eagerly (by exiting the closure) keeps the pool flowing.
+        let pixelBuffer = frame.capturedImage
+
+        encodeQueue.async { [weak self] in
+            guard let self else { return }
+            let jpeg = self.encodeJPEG(pixelBuffer: pixelBuffer)
+            DispatchQueue.main.async {
+                self.encodingInFlight = false
+                if let jpeg {
+                    self.mjpegServer.pushFrame(jpeg)
+                }
+            }
+        }
+    }
+
+    /// CVPixelBuffer (ARKit YUV, landscape sensor orientation) → 640x480 JPEG.
+    /// Output resolution and orientation match what `iphone_apriltag_processor.py`
+    /// assumes (intrinsics fx=fy=500, cx=320, cy=240 are calibrated for 640x480).
+    private func encodeJPEG(pixelBuffer: CVPixelBuffer) -> Data? {
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let extent = ciImage.extent
+        guard extent.width > 0, extent.height > 0 else { return nil }
+
+        let targetSize = CGSize(width: 640, height: 480)
+        let scaleX = targetSize.width / extent.width
+        let scaleY = targetSize.height / extent.height
+        let scale = min(scaleX, scaleY)
+        let scaled = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let cropped = scaled.cropped(to: CGRect(origin: .zero, size: targetSize))
+
+        let qualityKey = CIImageRepresentationOption(
+            rawValue: kCGImageDestinationLossyCompressionQuality as String
+        )
+        return ciContext.jpegRepresentation(
+            of: cropped,
+            colorSpace: CGColorSpaceCreateDeviceRGB(),
+            options: [qualityKey: 0.7]
+        )
     }
 
     // MARK: - Remote marker placement

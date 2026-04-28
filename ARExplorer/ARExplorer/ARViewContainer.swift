@@ -58,6 +58,7 @@ struct ARViewContainer: UIViewRepresentable {
         // overlay gets stuck.
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             sessionManager.startServer()
+            sessionManager.startMJPEGServer()
         }
 
         // ── 3. Wire up the delegate ────────────────────────────────────────
@@ -216,6 +217,10 @@ struct ARViewContainer: UIViewRepresentable {
 
         func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
             sessionManager.updateTrackingStatus(for: camera)
+        }
+
+        func session(_ session: ARSession, didUpdate frame: ARFrame) {
+            sessionManager.pushFrame(frame)
         }
 
         func session(_ session: ARSession, didFailWithError error: Error) {

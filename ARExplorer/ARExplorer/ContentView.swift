@@ -198,6 +198,10 @@ struct ContentView: View {
             Label(sessionManager.serverAddress, systemImage: "wifi")
                 .font(.caption2.monospaced().weight(.medium))
 
+            // MJPEG endpoint — used by the ASUS for AprilTag detection
+            Label(sessionManager.mjpegStreamAddress, systemImage: "video")
+                .font(.caption2.monospaced().weight(.medium))
+
             // Connection dot + status text
             HStack(spacing: 6) {
                 Circle()

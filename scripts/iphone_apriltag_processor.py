@@ -11,7 +11,9 @@ Usage:
 
 import argparse
 import math
+import signal
 import sys
+import threading
 import time
 
 import numpy as np
@@ -90,35 +92,47 @@ class IPhoneAprilTagProcessor(Node):
         self.marker_pub = self.create_publisher(Marker, "/ar_markers", 10)
         self._summarized_ids = set()
 
+        self._shutdown = False
+
         self.get_logger().info(
             f"iPhone AprilTag processor starting — stream={stream_url}, "
             f"tag_size={tag_size} m, intrinsics=(fx={DEFAULT_FX}, fy={DEFAULT_FY}, "
             f"cx={DEFAULT_CX}, cy={DEFAULT_CY}) [approximate]"
         )
 
-        self._run_loop()
+        self._capture_thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._capture_thread.start()
+
+    def stop(self):
+        self._shutdown = True
 
     def _run_loop(self):
-        while rclpy.ok():
+        while not self._shutdown and rclpy.ok():
             cap = cv2.VideoCapture(self.stream_url)
             if not cap.isOpened():
                 self.get_logger().warn(
                     f"Cannot open iPhone stream at {self.stream_url} — "
                     f"retrying in {RETRY_INTERVAL:.0f}s..."
                 )
-                time.sleep(RETRY_INTERVAL)
+                for _ in range(int(RETRY_INTERVAL * 10)):
+                    if self._shutdown:
+                        return
+                    time.sleep(0.1)
                 continue
 
             self.get_logger().info(f"Connected to iPhone stream: {self.stream_url}")
 
-            while rclpy.ok():
+            while not self._shutdown and rclpy.ok():
                 ret, frame = cap.read()
                 if not ret:
                     self.get_logger().warn(
                         f"iPhone stream disconnected — retrying in {RETRY_INTERVAL:.0f}s..."
                     )
                     cap.release()
-                    time.sleep(RETRY_INTERVAL)
+                    for _ in range(int(RETRY_INTERVAL * 10)):
+                        if self._shutdown:
+                            return
+                        time.sleep(0.1)
                     break
 
                 self._process_frame(frame)
@@ -218,11 +232,20 @@ def main():
 
     rclpy.init(args=ros_args)
     node = IPhoneAprilTagProcessor(stream_url=args.url, tag_size=args.tag_size)
+
+    def signal_handler(*_):
+        node.stop()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, SystemExit):
         pass
     finally:
+        node.stop()
         node.destroy_node()
         rclpy.shutdown()
 
