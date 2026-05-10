@@ -6,10 +6,11 @@
 // pattern and runs in parallel with it.
 //
 // Why this exists:
-//   The ASUS-side script `iphone_apriltag_processor.py` consumes the iPhone's camera
-//   feed at http://<iphone>:8082/stream to detect AprilTags and publish the iPhone's
-//   tag pose. Combined with the RealSense's tag pose, this yields the calibration
-//   transform between the two frames (Phase 4 — AprilTag shared coordinate frame).
+//   The ASUS-side `iphone_camera_bridge.py` node consumes the iPhone's camera feed at
+//   http://<iphone>:8082/stream and republishes it as ROS sensor_msgs/Image +
+//   CameraInfo. The downstream apriltag_ros node detects tags and broadcasts TF;
+//   combined with the RealSense's tag pose, this yields the calibration transform
+//   between the two frames (Phase 4 — AprilTag shared coordinate frame).
 //
 // Design decisions:
 //   • Matches `scripts/stream_to_phone.py`'s wire format exactly (boundary=--frame,

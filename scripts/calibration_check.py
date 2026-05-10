@@ -1,70 +1,80 @@
 #!/usr/bin/env python3
 """Compare AprilTag detections from the RealSense and iPhone cameras.
 
-Subscribes to /apriltag_detections (RealSense) and /ar_markers (iPhone, id >= 1000),
-looks for matching tag IDs, and prints both poses side by side when a match is found.
+Watches /realsense/detections and /iphone/detections (apriltag_msgs/AprilTagDetectionArray),
+looks up the corresponding TF for each detected tag, and prints both poses
+side by side when the same tag ID is seen by both cameras. Useful as a
+pre-flight check before running calibration.
 
 Usage:
     source /opt/ros/jazzy/setup.bash
     python3 scripts/calibration_check.py
 """
 
-import rclpy
-from rclpy.node import Node
-from visualization_msgs.msg import Marker
+from __future__ import annotations
 
-MARKER_ID_OFFSET = 1000
+import rclpy
+from apriltag_msgs.msg import AprilTagDetectionArray
+from rclpy.duration import Duration as RclpyDuration
+from rclpy.node import Node
+from rclpy.time import Time
+from tf2_ros import Buffer, TransformException, TransformListener
+
+
+REALSENSE_FRAME = "camera_color_optical_frame"
+IPHONE_FRAME = "iphone_camera"
 
 
 class CalibrationCheck(Node):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__("calibration_check")
-        self.realsense_tags = {}
-        self.iphone_tags = {}
+        self.realsense_tags: dict[int, tuple[float, float, float]] = {}
+        self.iphone_tags: dict[int, tuple[float, float, float]] = {}
+
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.tf_timeout = RclpyDuration(seconds=0.1)
 
         self.create_subscription(
-            Marker, "/apriltag_detections", self._on_realsense_marker, 10
+            AprilTagDetectionArray, "/realsense/detections",
+            lambda m: self._on_detections(m, "tag_", self.realsense_tags), 10,
         )
         self.create_subscription(
-            Marker, "/ar_markers", self._on_iphone_marker, 10
+            AprilTagDetectionArray, "/iphone/detections",
+            lambda m: self._on_detections(m, "iphone_tag_", self.iphone_tags), 10,
         )
 
         self.get_logger().info(
             "Calibration check running — waiting for tags from both cameras..."
         )
 
-    def _on_realsense_marker(self, msg: Marker):
-        if msg.action != Marker.ADD:
-            return
-        tag_id = msg.id
-        pos = msg.pose.position
-        self.realsense_tags[tag_id] = (pos.x, pos.y, pos.z)
-        self._check_match(tag_id)
+    def _on_detections(self, msg: AprilTagDetectionArray, prefix: str, store: dict) -> None:
+        parent = msg.header.frame_id
+        for d in msg.detections:
+            tag_id = int(d.id)
+            child = f"{prefix}{tag_id}"
+            try:
+                tf = self.tf_buffer.lookup_transform(parent, child, Time(), self.tf_timeout)
+            except TransformException:
+                continue
+            t = tf.transform.translation
+            store[tag_id] = (float(t.x), float(t.y), float(t.z))
+            self._check_match(tag_id)
 
-    def _on_iphone_marker(self, msg: Marker):
-        if msg.action != Marker.ADD:
-            return
-        if msg.id < MARKER_ID_OFFSET:
-            return
-        tag_id = msg.id - MARKER_ID_OFFSET
-        pos = msg.pose.position
-        self.iphone_tags[tag_id] = (pos.x, pos.y, pos.z)
-        self._check_match(tag_id)
-
-    def _check_match(self, tag_id: int):
+    def _check_match(self, tag_id: int) -> None:
         if tag_id not in self.realsense_tags or tag_id not in self.iphone_tags:
             return
         rs = self.realsense_tags[tag_id]
         ip = self.iphone_tags[tag_id]
         self.get_logger().info(
             f"\nTag {tag_id} seen by BOTH cameras:\n"
-            f"  RealSense: pos=({rs[0]:+.3f}, {rs[1]:+.3f}, {rs[2]:+.3f})\n"
-            f"  iPhone:    pos=({ip[0]:+.3f}, {ip[1]:+.3f}, {ip[2]:+.3f})\n"
+            f"  RealSense ({REALSENSE_FRAME}): pos=({rs[0]:+.3f}, {rs[1]:+.3f}, {rs[2]:+.3f})\n"
+            f"  iPhone    ({IPHONE_FRAME}):     pos=({ip[0]:+.3f}, {ip[1]:+.3f}, {ip[2]:+.3f})\n"
             f"  Ready for calibration handshake"
         )
 
 
-def main():
+def main() -> None:
     rclpy.init()
     node = CalibrationCheck()
     try:

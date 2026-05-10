@@ -9,8 +9,8 @@ calibration.json or receives it at runtime, then:
 3. Converts OpenCV convention (+y down, +z forward) → iPhone AR convention (+y up, -z forward)
 4. Publishes a yellow marker to /ar_markers so it appears in the iPhone's AR view
 
-The yellow marker should overlap with the green marker from
-iphone_apriltag_processor.py when calibration is correct.
+The yellow marker should overlap with the green marker from `tag_to_marker.py`
+(driven by the iPhone-side apriltag_ros instance) when calibration is correct.
 
 Usage:
     python3 scripts/calibrated_forwarder.py --load scripts/calibration.json

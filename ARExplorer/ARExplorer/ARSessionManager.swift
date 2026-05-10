@@ -359,8 +359,9 @@ class ARSessionManager {
     }
 
     /// CVPixelBuffer (ARKit YUV, landscape sensor orientation) → 640x480 JPEG.
-    /// Output resolution and orientation match what `iphone_apriltag_processor.py`
-    /// assumes (intrinsics fx=fy=500, cx=320, cy=240 are calibrated for 640x480).
+    /// Output resolution and orientation must match `config/iphone_camera_info.yaml`
+    /// on the ASUS side (default placeholder intrinsics fx=fy=500, cx=320, cy=240
+    /// are calibrated for 640x480).
     private func encodeJPEG(pixelBuffer: CVPixelBuffer) -> Data? {
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         let extent = ciImage.extent

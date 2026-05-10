@@ -1,0 +1,21 @@
+# apriltag_ros configuration for the iPhone camera.
+# Frame names are prefixed `iphone_` so they don't collide with the RealSense
+# instance — both detectors run concurrently in the same TF tree.
+
+apriltag_iphone:
+  ros__parameters:
+    family: 36h11
+    size: 0.17
+    max_hamming: 0
+    profile: false
+    detector:
+      threads: 2
+      decimate: 1.0
+      blur: 0.0
+      refine: 1
+      sharpening: 0.25
+      debug: 0
+    tag:
+      ids:    [0,             1,             2,             3,             4,             5]
+      frames: [iphone_tag_0,  iphone_tag_1,  iphone_tag_2,  iphone_tag_3,  iphone_tag_4,  iphone_tag_5]
+      sizes:  [0.17,          0.17,          0.17,          0.17,          0.17,          0.17]

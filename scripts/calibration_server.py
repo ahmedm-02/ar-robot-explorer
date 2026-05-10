@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Compute the calibration transform from RealSense to iPhone camera frame.
 
-Subscribes to TF from both cameras (apriltag_detector.py and
-iphone_apriltag_processor.py), waits until both see the same AprilTag,
-averages poses over 2 seconds, and computes:
+Subscribes to TF from both apriltag_ros instances (RealSense + iPhone),
+waits until both see the same AprilTag, averages poses over 2 seconds,
+and computes:
 
     T_iphone_from_realsense = T_iphone_from_tag × inverse(T_realsense_from_tag)
 
 Both TF trees use OpenCV convention (+x right, +y down, +z forward) since
-both detectors publish raw pupil-apriltags poses. The resulting calibration
+both detectors publish poses from rectified images in optical-frame coordinates. The resulting calibration
 transform is therefore also in OpenCV convention. When forwarding detections
 to /ar_markers for the iPhone, the forwarder must negate z (and handle y)
 to match iPhone AR convention (+x right, +y up, -z forward).

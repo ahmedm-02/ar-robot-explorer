@@ -35,20 +35,39 @@ RealSense RGB is re-served as MJPEG on `http://<asus-ip>:8081/stream` by `script
 
 ### ASUS Linux (ROS 2 Jazzy) — this machine
 
-```bash
-# Start the full ROS stack (rosbridge + RealSense + MJPEG stream). Ctrl+C cleans up.
-./scripts/start_ar_explorer.sh
+The whole pipeline is one ROS launch file. No bash startup scripts.
 
-# Interactive marker publisher (requires `source /opt/ros/jazzy/setup.bash` first
-# if not already sourced by the startup script).
+```bash
+source /opt/ros/jazzy/setup.bash
+
+# Full stack: rosbridge + RealSense + MJPEG-to-iPhone + iPhone bridge + 2x apriltag_ros + tag_to_marker
+ros2 launch launch/ar_explorer.launch.py iphone_ip:=192.168.1.42
+
+# RealSense only (no iPhone)
+ros2 launch launch/ar_explorer.launch.py
+
+# iPhone only (no RealSense USB device)
+ros2 launch launch/ar_explorer.launch.py iphone_ip:=192.168.1.42 realsense:=false
+
+# Disable AprilTag detection (raw streaming only)
+ros2 launch launch/ar_explorer.launch.py iphone_ip:=192.168.1.42 apriltag:=false
+```
+
+Launch arguments: `iphone_ip` (default `''`), `iphone_port` (`8082`), `realsense` (`true`), `apriltag` (`true`), `tag_size` (`0.17`), `rosbridge` (`true`).
+
+External dependency: install `apriltag_ros` once — `sudo apt install ros-jazzy-apriltag-ros`.
+
+```bash
+# Calibration (after the launch above is running and both cameras see tag 0)
+python3 scripts/run_calibration.py
+
+# Interactive marker publisher
 python3 scripts/ar_marker_publisher.py
 python3 scripts/ar_marker_publisher.py --legacy   # also publish PointStamped
 
 # Smoke test without the interactive REPL
 python3 scripts/test_markers.py
 ```
-
-The startup script is idempotent — it checks `pgrep` before starting each component, so re-running it after a partial failure is safe. It also skips the RealSense and MJPEG stages if no RealSense USB device is detected.
 
 ### iPhone app (must be built on macOS)
 
@@ -68,9 +87,17 @@ The iPhone's IP + port is shown in the app's HUD.
 | Channel | Direction | Payload |
 |---|---|---|
 | `/ar_markers` (rosbridge :9090) | ASUS → iPhone | `visualization_msgs/Marker` (ADD / DELETE / DELETEALL) |
-| `/ar_marker_position` (rosbridge :9090) | ASUS → iPhone | `geometry_msgs/PointStamped` (legacy, simple position only) |
+| `/ar_marker_position` (rosbridge :9090) | ASUS → iPhone | `geometry_msgs/PointStamped` (legacy) |
+| `/iphone_camera/image_raw` + `/camera_info` | ASUS internal | `sensor_msgs/Image` + `CameraInfo` from iPhone MJPEG bridge |
+| `/realsense/detections` | ASUS internal | `apriltag_msgs/AprilTagDetectionArray` (RealSense camera) |
+| `/iphone/detections` | ASUS internal | `apriltag_msgs/AprilTagDetectionArray` (iPhone camera) |
 | iPhone NWListener :8080 | MacBook → iPhone | JSON commands: `place`, `placeModel`, `clear` |
 | MJPEG :8081 `/stream` | ASUS → iPhone | multipart JPEG of RealSense RGB |
+| MJPEG :8082 `/stream` | iPhone → ASUS | multipart JPEG of iPhone camera (consumed by `iphone_camera_bridge.py`) |
+
+TF frames published by the apriltag_ros instances:
+- RealSense: `camera_color_optical_frame` → `tag_<id>`
+- iPhone:    `iphone_camera`               → `iphone_tag_<id>`
 
 ## Conventions worth preserving
 
