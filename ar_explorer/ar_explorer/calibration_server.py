@@ -199,19 +199,20 @@ class CalibrationServer(Node):
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--tag-id", type=int, default=0,
-                        help="AprilTag ID to calibrate on (default: 0).")
-    parser.add_argument("--tag-size", type=float, default=0.17,
-                        help="AprilTag edge length in meters (default: 0.17).")
+    parser.add_argument("--tag-id", type=int, default=17,
+                        help="AprilTag ID to calibrate on (default: 17, matches 36h11.yaml).")
+    parser.add_argument("--tag-size", type=float, default=0.120,
+                        help="AprilTag edge length in meters (default: 0.120, matches 36h11.yaml).")
     parser.add_argument("--duration", type=float, default=2.0,
                         help="Seconds to collect samples for averaging (default: 2.0).")
     parser.add_argument("--output", type=str, default=None,
-                        help="Output JSON path (default: scripts/calibration.json).")
+                        help="Output JSON path (default: ~/.ros/ar_explorer_calibration.json).")
     args, ros_args = parser.parse_known_args()
 
-    output = args.output or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "calibration.json"
+    output = args.output or os.path.expanduser(
+        "~/.ros/ar_explorer_calibration.json"
     )
+    os.makedirs(os.path.dirname(output), exist_ok=True)
 
     rclpy.init(args=ros_args)
     node = CalibrationServer(

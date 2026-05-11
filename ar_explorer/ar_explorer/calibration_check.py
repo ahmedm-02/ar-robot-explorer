@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Compare AprilTag detections from the RealSense and iPhone cameras.
 
-Watches /realsense/detections and /iphone/detections (apriltag_msgs/AprilTagDetectionArray),
-looks up the corresponding TF for each detected tag, and prints both poses
-side by side when the same tag ID is seen by both cameras. Useful as a
-pre-flight check before running calibration.
+Watches /detections (RealSense) and /iphone/detections (iPhone) — both are
+apriltag_msgs/AprilTagDetectionArray — looks up the corresponding TF for each
+detected tag, and prints both poses side by side when the same tag ID is seen
+by both cameras. Useful as a pre-flight check before running calibration.
 
 Usage:
-    source /opt/ros/jazzy/setup.bash
-    python3 scripts/calibration_check.py
+    source install/setup.bash
+    ros2 run ar_explorer calibration_check
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ class CalibrationCheck(Node):
         self.tf_timeout = RclpyDuration(seconds=0.1)
 
         self.create_subscription(
-            AprilTagDetectionArray, "/realsense/detections",
+            AprilTagDetectionArray, "/detections",
             lambda m: self._on_detections(m, "tag_", self.realsense_tags), 10,
         )
         self.create_subscription(

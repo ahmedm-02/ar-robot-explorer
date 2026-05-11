@@ -2,7 +2,11 @@
 """iPhone MJPEG → ROS 2 image bridge.
 
 Pulls the iPhone's MJPEG stream and republishes each frame as
-sensor_msgs/Image on `image_raw` plus sensor_msgs/CameraInfo on `camera_info`.
+sensor_msgs/Image on `~/image_raw` plus sensor_msgs/CameraInfo on `~/camera_info`
+(private names). Launched with `name='iphone'` and `namespace='iphone'`,
+those resolve to `/iphone/iphone/image_raw` and `/iphone/iphone/camera_info`
+— mirroring the `/camera/camera/...` layout of the RealSense node.
+
 The downstream apriltag_ros node consumes those topics like any other camera.
 
 Camera intrinsics are loaded from a standard `camera_info_manager` YAML file
@@ -93,8 +97,8 @@ class IPhoneCameraBridge(Node):
 
         self.camera_info = load_camera_info(info_path, self.frame_id)
         self.bridge = CvBridge()
-        self.image_pub = self.create_publisher(Image, "image_raw", 10)
-        self.info_pub = self.create_publisher(CameraInfo, "camera_info", 10)
+        self.image_pub = self.create_publisher(Image, "~/image_raw", 10)
+        self.info_pub = self.create_publisher(CameraInfo, "~/camera_info", 10)
 
         self.min_interval = (1.0 / rate) if rate > 0 else 0.0
         self._last_pub_time = 0.0

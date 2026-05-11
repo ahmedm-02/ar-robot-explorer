@@ -29,44 +29,42 @@ All marker coordinates are **iPhone camera-relative**: `+x` right, `+y` up, `-z`
 
 ### Camera video
 
-RealSense RGB is re-served as MJPEG on `http://<asus-ip>:8081/stream` by `scripts/stream_to_phone.py` (subscribes to `/camera/camera/color/image_raw`, throttles to ~12 fps). MJPEG is used because it works in any `WKWebView`/`UIImageView` with no client library.
+iPhone publishes its camera as MJPEG on `http://<iphone-ip>:8082/stream`; the ASUS-side `iphone_camera_bridge` node republishes it as `sensor_msgs/Image` + `CameraInfo` for the AprilTag detector. MJPEG is the wire format because it works in any client with no library.
 
 ## Common commands
 
 ### ASUS Linux (ROS 2 Jazzy) — this machine
 
-The whole pipeline is one ROS launch file. No bash startup scripts.
+The pipeline is an ament_python package at `ar_explorer/`. Build it once, then launch.
 
 ```bash
-source /opt/ros/jazzy/setup.bash
+# One-time setup
+sudo apt install -y ros-jazzy-apriltag-ros ros-jazzy-rosbridge-server \
+    ros-jazzy-realsense2-camera python3-yaml python3-opencv
 
-# Full stack: rosbridge + RealSense + MJPEG-to-iPhone + iPhone bridge + 2x apriltag_ros + tag_to_marker
-ros2 launch launch/ar_explorer.launch.py iphone_ip:=192.168.1.42
+# Build & source
+mkdir -p ~/ros2_ws/src && ln -snf ~/ar-robot-explorer/ar_explorer ~/ros2_ws/src/ar_explorer
+cd ~/ros2_ws && colcon build --packages-select ar_explorer && source install/setup.bash
 
-# RealSense only (no iPhone)
-ros2 launch launch/ar_explorer.launch.py
+# RealSense only (matches ASUS-tested baseline)
+ros2 launch ar_explorer ar_pipeline.launch.py
 
-# iPhone only (no RealSense USB device)
-ros2 launch launch/ar_explorer.launch.py iphone_ip:=192.168.1.42 realsense:=false
-
-# Disable AprilTag detection (raw streaming only)
-ros2 launch launch/ar_explorer.launch.py iphone_ip:=192.168.1.42 apriltag:=false
+# Full handshake with iPhone
+ros2 launch ar_explorer ar_pipeline.launch.py iphone_ip:=192.168.1.42
 ```
 
-Launch arguments: `iphone_ip` (default `''`), `iphone_port` (`8082`), `realsense` (`true`), `apriltag` (`true`), `tag_size` (`0.17`), `rosbridge` (`true`).
-
-External dependency: install `apriltag_ros` once — `sudo apt install ros-jazzy-apriltag-ros`.
+Launch args: `realsense` (true), `iphone_ip` (`''`; non-empty enables iPhone branch), `iphone_port` (`8082`), `apriltag` (true), `rosbridge` (true), `calibration` (true; gated on `iphone_ip`).
 
 ```bash
-# Calibration (after the launch above is running and both cameras see tag 0)
-python3 scripts/run_calibration.py
+# Pre-flight check that both cameras see the same tag
+ros2 run ar_explorer calibration_check
+
+# Recompute calibration interactively (uses ~/.ros/ar_explorer_calibration.json)
+ros2 run ar_explorer run_calibration
 
 # Interactive marker publisher
-python3 scripts/ar_marker_publisher.py
-python3 scripts/ar_marker_publisher.py --legacy   # also publish PointStamped
-
-# Smoke test without the interactive REPL
-python3 scripts/test_markers.py
+ros2 run ar_explorer ar_marker_publisher
+ros2 run ar_explorer ar_marker_publisher --legacy   # also publish PointStamped
 ```
 
 ### iPhone app (must be built on macOS)
@@ -88,16 +86,16 @@ The iPhone's IP + port is shown in the app's HUD.
 |---|---|---|
 | `/ar_markers` (rosbridge :9090) | ASUS → iPhone | `visualization_msgs/Marker` (ADD / DELETE / DELETEALL) |
 | `/ar_marker_position` (rosbridge :9090) | ASUS → iPhone | `geometry_msgs/PointStamped` (legacy) |
-| `/iphone_camera/image_raw` + `/camera_info` | ASUS internal | `sensor_msgs/Image` + `CameraInfo` from iPhone MJPEG bridge |
-| `/realsense/detections` | ASUS internal | `apriltag_msgs/AprilTagDetectionArray` (RealSense camera) |
-| `/iphone/detections` | ASUS internal | `apriltag_msgs/AprilTagDetectionArray` (iPhone camera) |
+| `/camera/camera/color/image_raw` + `/camera_info` | ASUS internal | RealSense RGB |
+| `/iphone/iphone/image_raw` + `/iphone/iphone/camera_info` | ASUS internal | iPhone camera (via `iphone_camera_bridge`) |
+| `/detections` | ASUS internal | `apriltag_msgs/AprilTagDetectionArray` (RealSense) |
+| `/iphone/detections` | ASUS internal | `apriltag_msgs/AprilTagDetectionArray` (iPhone) |
 | iPhone NWListener :8080 | MacBook → iPhone | JSON commands: `place`, `placeModel`, `clear` |
-| MJPEG :8081 `/stream` | ASUS → iPhone | multipart JPEG of RealSense RGB |
-| MJPEG :8082 `/stream` | iPhone → ASUS | multipart JPEG of iPhone camera (consumed by `iphone_camera_bridge.py`) |
+| MJPEG :8082 `/stream` | iPhone → ASUS | multipart JPEG of iPhone camera (consumed by `iphone_camera_bridge`) |
 
-TF frames published by the apriltag_ros instances:
-- RealSense: `camera_color_optical_frame` → `tag_<id>`
-- iPhone:    `iphone_camera`               → `iphone_tag_<id>`
+TF frames published by the apriltag_ros instances (per `36h11.yaml` / `36h11_iphone.yaml`):
+- RealSense: `camera_color_optical_frame` → `tag_17`
+- iPhone:    `iphone_camera`               → `iphone_tag_17`
 
 ## Conventions worth preserving
 
@@ -114,7 +112,7 @@ TF frames published by the apriltag_ros instances:
 - **Phase 2** — Remote marker placement via the direct path. MacBook Tkinter GUI connects to iPhone's `NWListener` on port 8080, sends camera-relative coordinates. Auto-populated model picker queries the iPhone for bundled USDZ names on connect.
 - **Phase 2.5** — USDZ 3D model display. Long-press to place bundled models, remote placement via `place_model` JSON command, billboard labels, world-space anchoring.
 - **Phase 3** — ROS bridge integration. iPhone subscribes to rosbridge as a WebSocket client. Supports both `visualization_msgs/Marker` (full-featured: position, color, text label, shape type, mesh_resource for USDZ names, ADD/DELETE/DELETEALL actions) and legacy `geometry_msgs/PointStamped` on parallel topics.
-- **RealSense integration** — D435 streaming in ROS 2, RGB available as MJPEG on port 8081, startup script handles all component launches.
+- **RealSense integration** — D435 streaming in ROS 2 via `realsense2_camera` launch; AprilTag detection via upstream `apriltag_ros`.
 
 ### Current focus
 

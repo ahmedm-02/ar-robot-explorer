@@ -211,9 +211,7 @@ def main():
         file_tag_id = 0
         file_tag_size = 0.17
     else:
-        default_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "calibration.json"
-        )
+        default_path = os.path.expanduser("~/.ros/ar_explorer_calibration.json")
         if os.path.exists(default_path):
             matrix, file_tag_id, file_tag_size = load_calibration(default_path)
             print(f"Loaded calibration from {default_path}")

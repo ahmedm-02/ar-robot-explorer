@@ -23,10 +23,9 @@ import time
 
 import numpy as np
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CALIBRATION_PATH = os.path.join(SCRIPT_DIR, "calibration.json")
+CALIBRATION_PATH = os.path.expanduser("~/.ros/ar_explorer_calibration.json")
 
-REALSENSE_DETECTIONS_TOPIC = "/realsense/detections"
+REALSENSE_DETECTIONS_TOPIC = "/detections"
 IPHONE_DETECTIONS_TOPIC = "/iphone/detections"
 
 child_procs: list[subprocess.Popen] = []
@@ -69,7 +68,7 @@ def run_calibration_server(tag_id: int, tag_size: float, duration: float):
         os.remove(CALIBRATION_PATH)
 
     proc = subprocess.Popen([
-        sys.executable, os.path.join(SCRIPT_DIR, "calibration_server.py"),
+        "ros2", "run", "ar_explorer", "calibration_server",
         "--tag-id", str(tag_id),
         "--tag-size", str(tag_size),
         "--duration", str(duration),
@@ -99,7 +98,7 @@ def run_calibration_server(tag_id: int, tag_size: float, duration: float):
 
 def launch_forwarder(tag_id: int, tag_size: float):
     proc = subprocess.Popen([
-        sys.executable, os.path.join(SCRIPT_DIR, "calibrated_forwarder.py"),
+        "ros2", "run", "ar_explorer", "calibrated_forwarder",
         "--load", CALIBRATION_PATH,
         "--tag-ids", str(tag_id),
         "--tag-size", str(tag_size),
@@ -111,7 +110,7 @@ def launch_forwarder(tag_id: int, tag_size: float):
 def stop_existing_forwarder():
     """Stop any forwarder we previously spawned (no `pkill` system-wide sweep)."""
     for p in list(child_procs):
-        if p.poll() is None and "calibrated_forwarder.py" in " ".join(p.args):
+        if p.poll() is None and "calibrated_forwarder" in " ".join(p.args):
             try:
                 p.terminate()
                 p.wait(timeout=2)
@@ -124,10 +123,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--tag-size", type=float, default=0.17,
-                        help="AprilTag edge length in meters (default: 0.17).")
-    parser.add_argument("--tag-id", type=int, default=0,
-                        help="AprilTag ID to calibrate on (default: 0).")
+    parser.add_argument("--tag-size", type=float, default=0.120,
+                        help="AprilTag edge length in meters (default: 0.120, matches 36h11.yaml).")
+    parser.add_argument("--tag-id", type=int, default=17,
+                        help="AprilTag ID to calibrate on (default: 17, matches 36h11.yaml).")
     parser.add_argument("--duration", type=float, default=2.0,
                         help="Seconds to collect calibration samples (default: 2.0).")
     args = parser.parse_args()
