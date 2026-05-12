@@ -143,6 +143,7 @@ class CalibrationServer(Node):
         T_ip_avg = self._average_transforms(self._ip_samples)
 
         T_iphone_from_realsense = T_ip_avg @ np.linalg.inv(T_rs_avg)
+        # T_iphone_from_realsense = np.linalg.inv(T_ip_avg) @ T_rs_avg
         self.calibration_matrix = T_iphone_from_realsense
         self._collecting = False
 
