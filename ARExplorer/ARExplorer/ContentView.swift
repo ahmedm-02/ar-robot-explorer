@@ -14,7 +14,7 @@ import UIKit
 struct ContentView: View {
 
     @State private var sessionManager = ARSessionManager()
-    @State private var rosHostname: String = ""
+    @AppStorage("rosHostname") private var rosHostname: String = ""
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -34,7 +34,13 @@ struct ContentView: View {
             }
         }
         // Keep the screen on while the app is in use — important for AR sessions.
-        .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
+        .onAppear {
+            UIApplication.shared.isIdleTimerDisabled = true
+            let host = rosHostname.trimmingCharacters(in: .whitespaces)
+            if !host.isEmpty && !sessionManager.rosBridge.connectionStatus.isConnected {
+                sessionManager.connectToROS(host: host)
+            }
+        }
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
     }
 
