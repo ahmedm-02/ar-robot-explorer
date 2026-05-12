@@ -1,6 +1,5 @@
 # iPhone camera intrinsics — camera_info_manager YAML format.
 #
-# These are *placeholder* values (fx=fy=500, cx=320, cy=240, no distortion).
 # Replace with calibrated values for accurate AprilTag pose estimation:
 #   ros2 run camera_calibration cameracalibrator --size 8x6 --square 0.025 \
 #     image:=/iphone_camera/image_raw camera:=/iphone_camera
@@ -11,8 +10,8 @@ camera_name: iphone_camera
 camera_matrix:
   rows: 3
   cols: 3
-  data: [500.0,   0.0, 320.0,
-           0.0, 500.0, 240.0,
+  data: [462.7,   0.0, 317.4,
+           0.0, 462.7, 240.1,
            0.0,   0.0,   1.0]
 distortion_model: plumb_bob
 distortion_coefficients:
@@ -28,6 +27,6 @@ rectification_matrix:
 projection_matrix:
   rows: 3
   cols: 4
-  data: [500.0,   0.0, 320.0, 0.0,
-           0.0, 500.0, 240.0, 0.0,
+  data: [462.7,   0.0, 317.4, 0.0,
+           0.0, 462.7, 240.1, 0.0,
            0.0,   0.0,   1.0, 0.0]

@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from scipy.spatial.transform import Rotation as R
 
 try:
     import tf2_ros
@@ -151,13 +152,23 @@ class CalibrationServer(Node):
         self._save_to_file()
 
     def _average_transforms(self, samples):
-        """Average homogeneous transforms by averaging translations and using
-        the rotation from the median sample (simple but robust to outliers)."""
+        """Average homogeneous transforms: mean of translations + quaternion
+        arithmetic mean of rotations. The hemisphere-flip step handles the
+        q/-q double cover so opposite-sign representations of the same
+        rotation don't cancel under the mean."""
         translations = np.array([T[:3, 3] for T in samples])
         avg_t = np.mean(translations, axis=0)
 
-        mid = len(samples) // 2
-        avg_R = samples[mid][:3, :3]
+        quats = np.array([R.from_matrix(T[:3, :3]).as_quat() for T in samples])
+        ref = quats[0]
+        for i in range(1, len(quats)):
+            if np.dot(quats[i], ref) < 0:
+                quats[i] = -quats[i]
+        avg_q = np.mean(quats, axis=0)
+        avg_q = avg_q / np.linalg.norm(avg_q)
+        avg_R = R.from_quat(avg_q).as_matrix()
+        assert np.allclose(avg_R @ avg_R.T, np.eye(3), atol=1e-4), \
+            "Averaged rotation isn't orthogonal"
 
         M = np.eye(4)
         M[:3, :3] = avg_R
@@ -204,8 +215,8 @@ def main():
                         help="AprilTag ID to calibrate on (default: 17, matches 36h11.yaml).")
     parser.add_argument("--tag-size", type=float, default=0.120,
                         help="AprilTag edge length in meters (default: 0.120, matches 36h11.yaml).")
-    parser.add_argument("--duration", type=float, default=2.0,
-                        help="Seconds to collect samples for averaging (default: 2.0).")
+    parser.add_argument("--duration", type=float, default=5.0,
+                        help="Seconds to collect samples for averaging (default: 5.0).")
     parser.add_argument("--output", type=str, default=None,
                         help="Output JSON path (default: ~/.ros/ar_explorer_calibration.json).")
     args, ros_args = parser.parse_known_args()
