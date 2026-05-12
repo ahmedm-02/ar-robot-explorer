@@ -220,8 +220,20 @@ class ARSessionManager {
     private func handleROSMarker(_ marker: ROSMarker) {
         switch marker.action {
         case .add:
-            // Remove existing marker with this ID to prevent stacking
-            deleteROSMarker(id: marker.id)
+            let key = "ros_marker_\(marker.id)"
+            if marker.ns == "calibrated_rs" {
+                // Calibrated-snapshot markers (e.g. yellow RealSense sphere) are
+                // valid only at the calibration pose — re-anchoring on every
+                // refresh would drag them along with the iPhone. Place once,
+                // then ignore subsequent updates with the same ID.
+                if rosMarkerIDs.contains(where: { $0.key == key }) {
+                    return
+                }
+            } else {
+                // Live-tracking markers (e.g. green AprilTag cube): replace on
+                // every update so the marker follows the latest detection.
+                deleteROSMarker(id: marker.id)
+            }
 
             let anchorCountBefore = placedAnchors.count
             if marker.shapeType == .meshResource, !marker.meshResource.isEmpty {

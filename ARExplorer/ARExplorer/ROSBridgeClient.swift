@@ -67,6 +67,7 @@ struct ROSMarker {
     }
 
     let id: Int
+    let ns: String
     let action: Action
     let shapeType: ShapeType
     let x: Float
@@ -302,6 +303,7 @@ final class ROSBridgeClient {
         guard let action = ROSMarker.Action(rawValue: actionRaw) else { return }
 
         let id       = (msg["id"] as? NSNumber)?.intValue ?? 0
+        let ns       = msg["ns"] as? String ?? ""
         let typeRaw  = (msg["type"] as? NSNumber)?.intValue ?? 2  // default: sphere
 
         // Position
@@ -327,7 +329,7 @@ final class ROSBridgeClient {
         let meshResource = msg["mesh_resource"] as? String ?? ""
 
         let marker = ROSMarker(
-            id: id, action: action,
+            id: id, ns: ns, action: action,
             shapeType: ROSMarker.ShapeType(rosValue: typeRaw),
             x: x, y: y, z: z,
             r: r, g: g, b: b, a: a,
