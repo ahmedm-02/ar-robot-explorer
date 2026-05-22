@@ -215,7 +215,7 @@ def main():
                         help="AprilTag ID to calibrate on (default: 17, matches 36h11.yaml).")
     parser.add_argument("--tag-size", type=float, default=0.120,
                         help="AprilTag edge length in meters (default: 0.120, matches 36h11.yaml).")
-    parser.add_argument("--duration", type=float, default=5.0,
+    parser.add_argument("--duration", type=float, default=2.0,
                         help="Seconds to collect samples for averaging (default: 5.0).")
     parser.add_argument("--output", type=str, default=None,
                         help="Output JSON path (default: ~/.ros/ar_explorer_calibration.json).")
