@@ -35,6 +35,7 @@ setup(
             'calibration_check    = ar_explorer.calibration_check:main',
             'run_calibration      = ar_explorer.run_calibration:main',
             'ar_marker_publisher  = ar_explorer.ar_marker_publisher:main',
+            'iphone_pose_bridge   = ar_explorer.iphone_pose_bridge:main',
         ],
     },
 )

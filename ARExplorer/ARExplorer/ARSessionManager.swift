@@ -152,6 +152,19 @@ class ARSessionManager {
     /// Target output rate matches the RealSense MJPEG stream (12 fps).
     private let mjpegTargetFPS: Double = 12
 
+    /// Target rate for pushing the ARKit camera pose to ROS. Half of ARKit's
+    /// 60 fps cap — plenty for TF, keeps wire/CPU cost modest.
+    private let posePublishFPS: Double = 30
+
+    /// Throttle clock for pose publishing — same idea as `lastEncodeTime`.
+    @ObservationIgnored
+    private var lastPosePublishTime: CFTimeInterval = 0
+
+    /// True once we've sent the rosbridge "advertise" frame for /iphone/pose.
+    /// Reset in `connectToROS` so a reconnect re-advertises.
+    @ObservationIgnored
+    private var didAdvertisePose: Bool = false
+
     // MARK: - Public API
 
     /// Cycle to the next marker type.
@@ -211,6 +224,7 @@ class ARSessionManager {
             self?.handleROSMarker(marker)
         }
 
+        didAdvertisePose = false
         rosBridge.connect(host: host, port: port)
     }
 
@@ -344,6 +358,7 @@ class ARSessionManager {
     /// Throttles to `mjpegTargetFPS`, encodes off-thread, and skips frames if a
     /// previous encode is still in progress.
     func pushFrame(_ frame: ARFrame) {
+        publishPoseIfReady(frame)
         guard mjpegServer.hasClients else { return }
 
         let now = CACurrentMediaTime()
@@ -368,6 +383,51 @@ class ARSessionManager {
                 }
             }
         }
+    }
+
+    /// Publish ARKit's camera pose to /iphone/pose as a TransformStamped,
+    /// throttled to `posePublishFPS`. Coordinates and quaternion are sent in
+    /// raw ARKit world convention (+X right, +Y up, +Z toward viewer); the
+    /// `iphone_pose_bridge` node on the ASUS converts to ROS REP-103 and
+    /// republishes as a TF transform.
+    private func publishPoseIfReady(_ frame: ARFrame) {
+        guard rosBridge.connectionStatus.isConnected else { return }
+
+        if !didAdvertisePose {
+            rosBridge.advertise(topic: "/iphone/pose",
+                                type: "geometry_msgs/TransformStamped")
+            didAdvertisePose = true
+        }
+
+        let now = CACurrentMediaTime()
+        if now - lastPosePublishTime < 1.0 / posePublishFPS { return }
+        lastPosePublishTime = now
+
+        let transform = frame.camera.transform
+        let t = transform.columns.3
+        // simd_quatf(_ matrix:) extracts the rotation from the upper-left 3×3.
+        let q = simd_quatf(transform)
+
+        let stampSec = Int(frame.timestamp)
+        let stampNanosec = Int((frame.timestamp - Double(stampSec)) * 1_000_000_000)
+
+        let msg: [String: Any] = [
+            "header": [
+                "stamp": ["sec": stampSec, "nanosec": stampNanosec],
+                "frame_id": "arkit_world",
+            ],
+            "child_frame_id": "iphone_camera",
+            "transform": [
+                "translation": [
+                    "x": Double(t.x), "y": Double(t.y), "z": Double(t.z),
+                ],
+                "rotation": [
+                    "x": Double(q.imag.x), "y": Double(q.imag.y),
+                    "z": Double(q.imag.z), "w": Double(q.real),
+                ],
+            ],
+        ]
+        rosBridge.publish(topic: "/iphone/pose", msg: msg)
     }
 
     /// CVPixelBuffer (ARKit YUV, landscape sensor orientation) → 640x480 JPEG.

@@ -161,6 +161,15 @@ def generate_launch_description() -> LaunchDescription:
         condition=IfCondition(iphone_and_apriltag),
     )
 
+    # ── iPhone pose → TF arkit_world → iphone_camera ────────────────────────
+    iphone_pose_bridge = Node(
+        package='ar_explorer',
+        executable='iphone_pose_bridge',
+        name='iphone_pose_bridge',
+        output='screen',
+        condition=IfCondition(has_iphone),
+    )
+
     # ── iPhone tag → /ar_markers overlay bridge ─────────────────────────────
     iphone_tag_to_marker = Node(
         package='ar_explorer',
@@ -216,6 +225,7 @@ def generate_launch_description() -> LaunchDescription:
 
         iphone_bridge,
         apriltag_iphone,
+        iphone_pose_bridge,
         iphone_tag_to_marker,
 
         calibration_server,

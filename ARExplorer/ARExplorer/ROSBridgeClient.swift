@@ -168,7 +168,42 @@ final class ROSBridgeClient {
         connectionStatus = .disconnected
     }
 
+    // MARK: - Outbound publishing
+    //
+    // Lightweight rosbridge v2 advertise + publish so the iPhone can push
+    // state outbound (currently used by ARSessionManager to publish the
+    // ARKit camera pose). Frames are queued via the same task.send(.string)
+    // path as sendSubscribe; URLSession buffers until the handshake completes.
+
+    /// Advertise a topic so the server knows its type before the first publish.
+    /// Call once per topic, ideally right after `connect(host:port:)`.
+    func advertise(topic: String, type: String) {
+        sendJSON(["op": "advertise", "topic": topic, "type": type])
+    }
+
+    /// Publish a single message to a previously advertised topic.
+    /// `msg` must be a JSON-serialisable dictionary matching the ROS message layout.
+    func publish(topic: String, msg: [String: Any]) {
+        sendJSON(["op": "publish", "topic": topic, "msg": msg])
+    }
+
     // MARK: - Private helpers
+
+    /// Serialise `payload` to JSON and send it on the WebSocket task.
+    /// No-op if the task hasn't been created yet (i.e. we never connected).
+    private func sendJSON(_ payload: [String: Any]) {
+        guard let task = webSocketTask else { return }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let text = String(data: data, encoding: .utf8) else {
+            print("[ROSBridgeClient] Failed to encode JSON payload")
+            return
+        }
+        task.send(.string(text)) { error in
+            if let error {
+                print("[ROSBridgeClient] Send error: \(error.localizedDescription)")
+            }
+        }
+    }
 
     private func tearDown() {
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
