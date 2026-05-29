@@ -28,7 +28,9 @@ from datetime import datetime, timezone
 
 import numpy as np
 import rclpy
+from geometry_msgs.msg import TransformStamped
 from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from scipy.spatial.transform import Rotation as R
 
 try:
@@ -74,6 +76,18 @@ class CalibrationServer(Node):
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
+        # Live calibration output (primary path to calibrated_forwarder).
+        # TRANSIENT_LOCAL so a forwarder that subscribes after we publish still
+        # receives the latest transform.
+        calib_qos = QoSProfile(
+            depth=1,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+        )
+        self.transform_pub = self.create_publisher(
+            TransformStamped, "/calibration/transform", calib_qos
+        )
 
         self.calibration_matrix = None
         self._collecting = False
@@ -150,6 +164,37 @@ class CalibrationServer(Node):
 
         self._print_result()
         self._save_to_file()
+        self._publish_transform()
+
+    def _publish_transform(self):
+        """Publish the freshly computed calibration on /calibration/transform.
+
+        This is the primary, live path to calibrated_forwarder — the JSON file
+        is only a persistence/fallback mechanism. frame_id/child_frame_id label
+        the transform RealSense -> iPhone; the forwarder reconstructs the same
+        4x4 matrix via transform_to_matrix, so the values round-trip exactly.
+        """
+        M = self.calibration_matrix
+        t = M[:3, 3]
+        q = R.from_matrix(M[:3, :3]).as_quat()  # scalar-last: [x, y, z, w]
+
+        msg = TransformStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = REALSENSE_FRAME
+        msg.child_frame_id = IPHONE_FRAME
+        msg.transform.translation.x = float(t[0])
+        msg.transform.translation.y = float(t[1])
+        msg.transform.translation.z = float(t[2])
+        msg.transform.rotation.x = float(q[0])
+        msg.transform.rotation.y = float(q[1])
+        msg.transform.rotation.z = float(q[2])
+        msg.transform.rotation.w = float(q[3])
+        self.transform_pub.publish(msg)
+
+        self.get_logger().info(
+            f"Published live calibration on /calibration/transform: "
+            f"tx={float(t[0]):+.3f}, ty={float(t[1]):+.3f}, tz={float(t[2]):+.3f}"
+        )
 
     def _average_transforms(self, samples):
         """Average homogeneous transforms: mean of translations + quaternion

@@ -25,7 +25,9 @@ import sys
 import numpy as np
 import rclpy
 from builtin_interfaces.msg import Duration as DurationMsg
+from geometry_msgs.msg import TransformStamped
 from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 
 try:
     import tf2_ros
@@ -63,10 +65,14 @@ def transform_to_matrix(transform):
 
 
 class CalibratedForwarder(Node):
-    def __init__(self, calibration_matrix: np.ndarray, tag_ids: list,
+    def __init__(self, calibration_matrix, tag_ids: list,
                  tag_size: float):
         super().__init__("calibrated_forwarder")
+        # May be None: when no JSON is found we start without a calibration and
+        # wait for the live transform from calibration_server. The live path
+        # always takes precedence once a message arrives.
         self.T_iphone_from_realsense = calibration_matrix
+        self._live_calibration_received = False
         self.tag_ids = tag_ids
         self.tag_size = tag_size
 
@@ -76,6 +82,30 @@ class CalibratedForwarder(Node):
         self._summarized_ids = set()
         self._published_cam = False
 
+        # Live calibration input (primary path). TRANSIENT_LOCAL (matching the
+        # server) so we receive the latest transform even if we subscribe after
+        # it was published.
+        calib_qos = QoSProfile(
+            depth=1,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+        )
+        self.create_subscription(
+            TransformStamped, "/calibration/transform",
+            self._on_calibration, calib_qos
+        )
+
+        if self.T_iphone_from_realsense is not None:
+            jt = self.T_iphone_from_realsense[:3, 3]
+            self.get_logger().info(
+                f"Loaded calibration from JSON: "
+                f"tx={float(jt[0]):+.3f}, ty={float(jt[1]):+.3f}, tz={float(jt[2]):+.3f}"
+            )
+        else:
+            self.get_logger().info(
+                "No calibration JSON found — waiting for live calibration..."
+            )
+
         self.create_timer(0.1, self._tick)
 
         tag_str = ", ".join(str(i) for i in tag_ids)
@@ -84,7 +114,31 @@ class CalibratedForwarder(Node):
             f"publishing yellow markers to /ar_markers"
         )
 
+    def _on_calibration(self, msg: TransformStamped):
+        """Live calibration update from calibration_server (primary path).
+
+        Overrides whatever was loaded from JSON. Reuses transform_to_matrix so
+        the reconstructed 4x4 matches the server's exactly.
+        """
+        self.T_iphone_from_realsense = transform_to_matrix(msg.transform)
+        t = self.T_iphone_from_realsense[:3, 3]
+        if not self._live_calibration_received:
+            self._live_calibration_received = True
+            self.get_logger().info(
+                f"Live calibration received: "
+                f"tx={float(t[0]):+.3f}, ty={float(t[1]):+.3f}, tz={float(t[2]):+.3f}"
+            )
+        else:
+            self.get_logger().info(
+                f"Calibration updated: "
+                f"tx={float(t[0]):+.3f}, ty={float(t[1]):+.3f}, tz={float(t[2]):+.3f}"
+            )
+
     def _tick(self):
+        # Nothing to forward until a calibration is available (JSON or live).
+        if self.T_iphone_from_realsense is None:
+            return
+
         now = self.get_clock().now().to_msg()
 
         # Publish the RealSense camera position in iPhone coordinates.
@@ -216,9 +270,13 @@ def main():
             matrix, file_tag_id, file_tag_size = load_calibration(default_path)
             print(f"Loaded calibration from {default_path}")
         else:
-            print("ERROR: No calibration provided. Use --load or run calibration first.",
-                  file=sys.stderr)
-            sys.exit(1)
+            # Not fatal anymore: start without a calibration and wait for the
+            # live transform from calibration_server on /calibration/transform.
+            matrix = None
+            file_tag_id = 0
+            file_tag_size = 0.17
+            print("No calibration JSON found — waiting for live calibration "
+                  "on /calibration/transform")
 
     tag_ids = ([int(x) for x in args.tag_ids.split(",")]
                if args.tag_ids else [file_tag_id])
