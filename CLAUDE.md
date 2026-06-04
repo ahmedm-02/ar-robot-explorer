@@ -46,14 +46,20 @@ sudo apt install -y ros-jazzy-apriltag-ros ros-jazzy-rosbridge-server \
 mkdir -p ~/ros2_ws/src && ln -snf ~/ar-robot-explorer/ar_explorer ~/ros2_ws/src/ar_explorer
 cd ~/ros2_ws && colcon build --packages-select ar_explorer && source install/setup.bash
 
-# RealSense only (matches ASUS-tested baseline)
+# Single-machine baseline — every node on one box (matches ASUS-tested baseline)
 ros2 launch ar_explorer ar_pipeline.launch.py
 
-# Full handshake with iPhone
+# Full handshake with iPhone (still single-machine)
 ros2 launch ar_explorer ar_pipeline.launch.py iphone_ip:=192.168.1.42
+
+# Split across two machines on the same ROS network:
+#   - On the NUC mounted on the robot dog (RealSense + its AprilTag only):
+ros2 launch ar_explorer ar_pipeline.launch.py machine:=dog
+#   - On the base computer (iPhone bridge, calibration, rosbridge):
+ros2 launch ar_explorer ar_pipeline.launch.py machine:=base iphone_ip:=192.168.1.42
 ```
 
-Launch args: `realsense` (true), `iphone_ip` (`''`; non-empty enables iPhone branch), `iphone_port` (`8082`), `apriltag` (true), `rosbridge` (true), `calibration` (true; gated on `iphone_ip`).
+Launch args: `machine` (`'all'`; `'all'` runs everything on one box, `'dog'` = RealSense nodes only, `'base'` = iPhone + calibration + rosbridge), `realsense` (true), `iphone_ip` (`''`; non-empty enables iPhone branch), `iphone_port` (`8082`), `apriltag` (true), `rosbridge` (true), `calibration` (true; gated on `iphone_ip`).
 
 ```bash
 # Pre-flight check that both cameras see the same tag
