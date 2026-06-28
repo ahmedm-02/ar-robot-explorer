@@ -70,6 +70,9 @@ struct ROSMarker {
     let ns: String
     let action: Action
     let shapeType: ShapeType
+    /// header.frame_id. "camera" → iPhone-camera-relative (default convention);
+    /// "arkit_world" → absolute ARKit world coordinates (RealSense detections).
+    let frameId: String
     let x: Float
     let y: Float
     let z: Float
@@ -341,6 +344,12 @@ final class ROSBridgeClient {
         let ns       = msg["ns"] as? String ?? ""
         let typeRaw  = (msg["type"] as? NSNumber)?.intValue ?? 2  // default: sphere
 
+        // header.frame_id distinguishes camera-relative markers ("camera")
+        // from world-anchored ones ("arkit_world"). Default to "camera" so
+        // existing publishers that omit it keep their prior behavior.
+        let header   = msg["header"] as? [String: Any]
+        let frameId  = header?["frame_id"] as? String ?? "camera"
+
         // Position
         let pose     = msg["pose"] as? [String: Any]
         let position = pose?["position"] as? [String: Any]
@@ -366,6 +375,7 @@ final class ROSBridgeClient {
         let marker = ROSMarker(
             id: id, ns: ns, action: action,
             shapeType: ROSMarker.ShapeType(rosValue: typeRaw),
+            frameId: frameId,
             x: x, y: y, z: z,
             r: r, g: g, b: b, a: a,
             scale: scale, label: label,

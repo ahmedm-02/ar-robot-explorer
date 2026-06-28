@@ -234,37 +234,53 @@ class ARSessionManager {
     private func handleROSMarker(_ marker: ROSMarker) {
         switch marker.action {
         case .add:
-            let key = "ros_marker_\(marker.id)"
-            if marker.ns == "calibrated_rs" {
-                // Calibrated-snapshot markers (e.g. yellow RealSense sphere) are
-                // valid only at the calibration pose — re-anchoring on every
-                // refresh would drag them along with the iPhone. Place once,
-                // then ignore subsequent updates with the same ID.
-                if rosMarkerIDs.contains(where: { $0.key == key }) {
-                    return
-                }
-            } else {
-                // Live-tracking markers (e.g. green AprilTag cube): replace on
-                // every update so the marker follows the latest detection.
-                deleteROSMarker(id: marker.id)
-            }
+            // Live-tracking for all markers: delete any previous instance, then
+            // re-add at the latest pose so each follows its newest detection.
+            //
+            // World-frame markers (frame_id "arkit_world", e.g. RealSense
+            // detections) anchor at absolute world coordinates, so re-adding does
+            // NOT drag them with the iPhone — that is exactly what keeps them
+            // fixed in the room while the phone moves. Camera-frame markers
+            // (iPhone AprilTag, MacBook GUI) stay relative to the iPhone's
+            // current pose, as before.
+            deleteROSMarker(id: marker.id)
 
             let anchorCountBefore = placedAnchors.count
+            let isWorldFrame = (marker.frameId == "arkit_world")
+
             if marker.shapeType == .meshResource, !marker.meshResource.isEmpty {
-                placeRemoteModel(
-                    x: marker.x, y: marker.y, z: marker.z,
-                    modelName: marker.meshResource,
-                    label: marker.label,
-                    scale: marker.scale
-                )
+                if isWorldFrame {
+                    placeWorldModel(
+                        x: marker.x, y: marker.y, z: marker.z,
+                        modelName: marker.meshResource,
+                        label: marker.label,
+                        scale: marker.scale
+                    )
+                } else {
+                    placeRemoteModel(
+                        x: marker.x, y: marker.y, z: marker.z,
+                        modelName: marker.meshResource,
+                        label: marker.label,
+                        scale: marker.scale
+                    )
+                }
             } else {
                 let colorName = closestColorName(r: marker.r, g: marker.g, b: marker.b)
-                placeRemoteMarker(
-                    x: marker.x, y: marker.y, z: marker.z,
-                    label: marker.label,
-                    color: colorName,
-                    radius: 0.07 * marker.scale
-                )
+                if isWorldFrame {
+                    placeWorldMarker(
+                        x: marker.x, y: marker.y, z: marker.z,
+                        label: marker.label,
+                        color: colorName,
+                        radius: 0.07 * marker.scale
+                    )
+                } else {
+                    placeRemoteMarker(
+                        x: marker.x, y: marker.y, z: marker.z,
+                        label: marker.label,
+                        color: colorName,
+                        radius: 0.07 * marker.scale
+                    )
+                }
             }
             // Track the newly placed anchor by ROS marker ID for deletion
             if placedAnchors.count > anchorCountBefore,
@@ -517,6 +533,51 @@ class ARSessionManager {
         let worldPos     = SIMD3<Float>(worldPos4.x, worldPos4.y, worldPos4.z)
         var transform    = matrix_identity_float4x4
         transform.columns.3 = SIMD4<Float>(worldPos.x, worldPos.y, worldPos.z, 1.0)
+        placeModelEntity(named: modelName, scale: scale, label: label, at: transform, in: arView)
+    }
+
+    // MARK: - World-frame placement
+    //
+    // For markers whose coordinates are already in the ARKit world frame
+    // (frame_id == "arkit_world") — e.g. RealSense detections forwarded by
+    // calibrated_forwarder. These anchor at absolute world coordinates, so they
+    // stay fixed in the room no matter how the iPhone moves. Unlike the
+    // placeRemote* variants, they do NOT multiply by the current camera
+    // transform — the coordinates are already world-space.
+
+    /// Place a labeled sphere at an absolute ARKit-world position.
+    func placeWorldMarker(x: Float, y: Float, z: Float, label: String, color: String, radius: Float = 0.07) {
+        guard let arView else {
+            print("[ARSessionManager] No ARView — cannot place world marker")
+            return
+        }
+        let anchor = AnchorEntity(world: SIMD3<Float>(x, y, z))
+
+        var mat = SimpleMaterial()
+        mat.color     = SimpleMaterial.BaseColor(tint: resolvedColor(color), texture: nil)
+        mat.roughness = 0.4
+        mat.metallic  = 0.1
+
+        let sphere = ModelEntity(mesh: .generateSphere(radius: radius), materials: [mat])
+        anchor.addChild(sphere)
+
+        if !label.isEmpty, let labelEntity = makeLabelEntity(label) {
+            anchor.addChild(labelEntity)
+        }
+
+        arView.scene.addAnchor(anchor)
+        placedAnchors.append(anchor)
+        placedCount += 1
+    }
+
+    /// Place a USDZ model at an absolute ARKit-world position.
+    func placeWorldModel(x: Float, y: Float, z: Float, modelName: String, label: String, scale: Float) {
+        guard let arView else {
+            print("[ARSessionManager] No ARView — cannot place world model")
+            return
+        }
+        var transform = matrix_identity_float4x4
+        transform.columns.3 = SIMD4<Float>(x, y, z, 1.0)
         placeModelEntity(named: modelName, scale: scale, label: label, at: transform, in: arView)
     }
 

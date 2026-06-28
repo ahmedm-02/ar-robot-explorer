@@ -41,8 +41,16 @@ from visualization_msgs.msg import Marker
 
 
 REALSENSE_FRAME = "camera_color_optical_frame"
+WORLD_FRAME = "arkit_world"
 MARKER_ID_OFFSET = 2000
 REALSENSE_CAMERA_MARKER_ID = 9999
+
+# iPhone optical (OpenCV: +x right, +y down, +z forward) → iPhone ARKit camera
+# (+x right, +y up, +z toward viewer). Same origin, a 180° rotation about x.
+# The calibration transform is in optical convention, but the iPhone pose from
+# /iphone/pose is in raw ARKit convention, so we bridge the two with this when
+# composing the world anchor.
+T_ARKIT_FROM_OPTICAL = np.diag([1.0, -1.0, -1.0, 1.0])
 
 
 def transform_to_matrix(transform):
@@ -95,6 +103,17 @@ class CalibratedForwarder(Node):
             self._on_calibration, calib_qos
         )
 
+        # iPhone ARKit pose (raw ARKit convention), published by the iPhone via
+        # rosbridge. We cache the latest sample and freeze it at calibration
+        # time as T_world_from_iphone(t0) — the anchor that maps RealSense
+        # detections into the fixed ARKit world frame.
+        self._latest_iphone_pose = None
+        self.T_world_from_iphone_t0 = None
+        self._warned_no_pose = False
+        self.create_subscription(
+            TransformStamped, "/iphone/pose", self._on_iphone_pose, 10
+        )
+
         if self.T_iphone_from_realsense is not None:
             jt = self.T_iphone_from_realsense[:3, 3]
             self.get_logger().info(
@@ -114,11 +133,22 @@ class CalibratedForwarder(Node):
             f"publishing yellow markers to /ar_markers"
         )
 
+    def _on_iphone_pose(self, msg: TransformStamped):
+        """Cache the latest iPhone ARKit pose (raw ARKit convention).
+
+        Kept live until calibration, at which point _on_calibration freezes the
+        most recent sample as the world anchor.
+        """
+        self._latest_iphone_pose = transform_to_matrix(msg.transform)
+
     def _on_calibration(self, msg: TransformStamped):
         """Live calibration update from calibration_server (primary path).
 
         Overrides whatever was loaded from JSON. Reuses transform_to_matrix so
-        the reconstructed 4x4 matches the server's exactly.
+        the reconstructed 4x4 matches the server's exactly. Also freezes the
+        iPhone's current world pose: combined with the calibration, this anchors
+        the RealSense in the fixed ARKit world frame so its markers no longer
+        drift when the iPhone moves.
         """
         self.T_iphone_from_realsense = transform_to_matrix(msg.transform)
         t = self.T_iphone_from_realsense[:3, 3]
@@ -134,24 +164,58 @@ class CalibratedForwarder(Node):
                 f"tx={float(t[0]):+.3f}, ty={float(t[1]):+.3f}, tz={float(t[2]):+.3f}"
             )
 
+        # Freeze T_world_from_iphone at calibration time. Assumes the iPhone is
+        # held roughly still during the calibration handshake (it is — both
+        # cameras must hold the tag in view), so the most recent pose ≈ the
+        # pose at the calibration instant.
+        if self._latest_iphone_pose is not None:
+            self.T_world_from_iphone_t0 = self._latest_iphone_pose
+            self._warned_no_pose = False
+            wt = self.T_world_from_iphone_t0[:3, 3]
+            self.get_logger().info(
+                f"Froze iPhone world pose at calibration: "
+                f"x={float(wt[0]):+.3f}, y={float(wt[1]):+.3f}, z={float(wt[2]):+.3f}"
+            )
+        else:
+            self.get_logger().warn(
+                "Calibration received but no /iphone/pose yet — world anchoring "
+                "deferred until the iPhone starts publishing its pose."
+            )
+
     def _tick(self):
         # Nothing to forward until a calibration is available (JSON or live).
         if self.T_iphone_from_realsense is None:
             return
 
+        # World anchoring needs the iPhone's frozen calibration-time pose.
+        if self.T_world_from_iphone_t0 is None:
+            if not self._warned_no_pose:
+                self._warned_no_pose = True
+                self.get_logger().warn(
+                    "Have calibration but no iPhone world pose yet — markers "
+                    "deferred. Is the iPhone connected and publishing /iphone/pose?"
+                )
+            return
+
         now = self.get_clock().now().to_msg()
 
-        # Publish the RealSense camera position in iPhone coordinates.
-        # The RealSense origin (0,0,0) transformed by the calibration matrix
-        # gives its position in the iPhone camera frame.
-        rs_origin = self.T_iphone_from_realsense @ np.array([0, 0, 0, 1])
-        cam_x = float(rs_origin[0])
-        cam_y = float(-rs_origin[1])
-        cam_z = float(-rs_origin[2])
+        # RealSense optical → ARKit world. Frozen at calibration time, so the
+        # RealSense's world pose is fixed and its markers stay put as the iPhone
+        # moves. (Future: drive T_world_from_realsense from the dog's odometry
+        # so it tracks the robot as it walks.)
+        T_world_from_rs = (
+            self.T_world_from_iphone_t0
+            @ T_ARKIT_FROM_OPTICAL
+            @ self.T_iphone_from_realsense
+        )
+
+        # RealSense camera origin in the ARKit world frame.
+        rs_world = T_world_from_rs @ np.array([0, 0, 0, 1])
+        cam_x, cam_y, cam_z = float(rs_world[0]), float(rs_world[1]), float(rs_world[2])
 
         cam_marker = Marker()
         cam_marker.header.stamp = now
-        cam_marker.header.frame_id = "camera"
+        cam_marker.header.frame_id = WORLD_FRAME
         cam_marker.ns = "calibrated_rs"
         cam_marker.id = REALSENSE_CAMERA_MARKER_ID
         cam_marker.type = Marker.SPHERE
@@ -174,7 +238,7 @@ class CalibratedForwarder(Node):
         if not self._published_cam:
             self._published_cam = True
             self.get_logger().info(
-                f"RealSense camera marker: iPhone coords "
+                f"RealSense camera marker: world coords "
                 f"({cam_x:+.3f}, {cam_y:+.3f}, {cam_z:+.3f})"
             )
 
@@ -189,28 +253,22 @@ class CalibratedForwarder(Node):
 
             T_rs_from_tag = transform_to_matrix(tf.transform)
 
-            # Transform to iPhone camera frame (still OpenCV convention)
-            T_ip_from_tag = self.T_iphone_from_realsense @ T_rs_from_tag
-
-            # Extract position in OpenCV convention
-            x_cv, y_cv, z_cv = T_ip_from_tag[:3, 3]
-
-            # Convert to iPhone AR convention: +x right, +y up, -z forward
-            # OpenCV: +x right, +y down, +z forward
-            ar_x = float(x_cv)
-            ar_y = float(-y_cv)
-            ar_z = float(-z_cv)
+            # Tag pose in the ARKit world frame: the live RealSense detection
+            # composed with the frozen world anchor. As the tag moves, this
+            # updates; as the iPhone moves, it does not.
+            T_world_from_tag = T_world_from_rs @ T_rs_from_tag
+            wx, wy, wz = T_world_from_tag[:3, 3]
 
             marker = Marker()
             marker.header.stamp = now
-            marker.header.frame_id = "camera"
+            marker.header.frame_id = WORLD_FRAME
             marker.ns = "calibrated_rs"
             marker.id = int(tag_id) + MARKER_ID_OFFSET
             marker.type = Marker.CUBE
             marker.action = Marker.ADD
-            marker.pose.position.x = ar_x
-            marker.pose.position.y = ar_y
-            marker.pose.position.z = ar_z
+            marker.pose.position.x = float(wx)
+            marker.pose.position.y = float(wy)
+            marker.pose.position.z = float(wz)
             marker.pose.orientation.x = 0.0
             marker.pose.orientation.y = 0.0
             marker.pose.orientation.z = 0.0
@@ -231,7 +289,7 @@ class CalibratedForwarder(Node):
                 self.get_logger().info(
                     f"Forwarding tag {tag_id}: RS({T_rs_from_tag[0,3]:+.3f}, "
                     f"{T_rs_from_tag[1,3]:+.3f}, {T_rs_from_tag[2,3]:+.3f}) "
-                    f"→ iPhone({ar_x:+.3f}, {ar_y:+.3f}, {ar_z:+.3f})"
+                    f"→ world({float(wx):+.3f}, {float(wy):+.3f}, {float(wz):+.3f})"
                 )
 
 
