@@ -1,0 +1,3 @@
+[submodule "Lite3_ROS"]
+	path = Lite3_ROS
+	url = https://github.com/angelina-zhang/Lite3_ROS.git
