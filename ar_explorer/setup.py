@@ -36,6 +36,7 @@ setup(
             'run_calibration      = ar_explorer.run_calibration:main',
             'ar_marker_publisher  = ar_explorer.ar_marker_publisher:main',
             'iphone_pose_bridge   = ar_explorer.iphone_pose_bridge:main',
+            'odom_relay_receiver  = ar_explorer.odom_relay_receiver:main',
         ],
     },
 )
