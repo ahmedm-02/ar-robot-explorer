@@ -96,6 +96,7 @@ def generate_launch_description() -> LaunchDescription:
     rosbridge = LaunchConfiguration('rosbridge')
     calibration = LaunchConfiguration('calibration')
     odom_relay = LaunchConfiguration('odom_relay')
+    origin_markers = LaunchConfiguration('origin_markers')
 
     has_iphone = PythonExpression(["'", iphone_ip, "' != ''"])
     realsense_and_apriltag = PythonExpression(
@@ -131,6 +132,8 @@ def generate_launch_description() -> LaunchDescription:
         [iphone_and_apriltag, " and ", is_base])
     iphone_calibration_on_base = PythonExpression(
         [iphone_and_calibration, " and ", is_base])
+    origin_markers_on_base     = PythonExpression(
+        ["'", origin_markers, "'.lower() == 'true' and ", is_base])
 
     iphone_url = ['http://', iphone_ip, ':', iphone_port, '/stream']
 
@@ -283,6 +286,39 @@ def generate_launch_description() -> LaunchDescription:
         condition=IfCondition(iphone_calibration_on_base),
     )
 
+    # ── Dog↔ARKit world calibration (arkit_world → odom) ────────────────────
+    # Base-group + single instance by design, so there is never more than one
+    # publisher of the arkit_world→odom edge. The calibrator computes+saves (with
+    # a settle+converge gate so startup jitter can't lock in a bad value) and
+    # never publishes TF; odom_world_tf is the SOLE persistent publisher, loading
+    # the saved file. Recalibrate live via the calibrator's ~/recalibrate service.
+    odom_world_calibrator = Node(
+        package='ar_explorer',
+        executable='odom_world_calibrator',
+        name='odom_world_calibrator',
+        parameters=[{'tag_id': 17}],
+        output='screen',
+        condition=IfCondition(iphone_calibration_on_base),
+    )
+
+    odom_world_tf = Node(
+        package='ar_explorer',
+        executable='odom_world_tf',
+        name='odom_world_tf',
+        output='screen',
+        condition=IfCondition(is_base),
+    )
+
+    # ── Origin/tracker spheres for iPhone visual verification ───────────────
+    # 🔴 arkit_world origin  🔵 odom origin  🟢 live base_link (dog).
+    origin_markers_node = Node(
+        package='ar_explorer',
+        executable='origin_markers',
+        name='origin_markers',
+        output='screen',
+        condition=IfCondition(origin_markers_on_base),
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument(
             'machine',
@@ -302,6 +338,7 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('rosbridge',   default_value='true'),
         DeclareLaunchArgument('calibration', default_value='true'),
         DeclareLaunchArgument('odom_relay',  default_value='true'),
+        DeclareLaunchArgument('origin_markers', default_value='true'),
 
         LogInfo(msg=['AR Explorer launching — machine=', machine,
                      ', realsense=', realsense,
@@ -322,4 +359,8 @@ def generate_launch_description() -> LaunchDescription:
 
         calibration_server,
         calibrated_forwarder,
+
+        odom_world_calibrator,
+        odom_world_tf,
+        origin_markers_node,
     ])
