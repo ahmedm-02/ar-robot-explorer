@@ -38,6 +38,7 @@ setup(
             'iphone_pose_bridge   = ar_explorer.iphone_pose_bridge:main',
             'odom_relay_receiver  = ar_explorer.odom_relay_receiver:main',
             'odom_world_calibrator = ar_explorer.odom_world_calibrator:main',
+            'origin_markers       = ar_explorer.origin_markers:main',
         ],
     },
 )
