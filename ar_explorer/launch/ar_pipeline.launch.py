@@ -95,6 +95,7 @@ def generate_launch_description() -> LaunchDescription:
     apriltag = LaunchConfiguration('apriltag')
     rosbridge = LaunchConfiguration('rosbridge')
     calibration = LaunchConfiguration('calibration')
+    odom_relay = LaunchConfiguration('odom_relay')
 
     has_iphone = PythonExpression(["'", iphone_ip, "' != ''"])
     realsense_and_apriltag = PythonExpression(
@@ -120,6 +121,8 @@ def generate_launch_description() -> LaunchDescription:
         ["'", realsense, "'.lower() == 'true' and ", is_dog])
     realsense_apriltag_on_dog  = PythonExpression(
         [realsense_and_apriltag, " and ", is_dog])
+    odom_relay_on_dog          = PythonExpression(
+        ["'", odom_relay, "'.lower() == 'true' and ", is_dog])
     rosbridge_on_base          = PythonExpression(
         ["'", rosbridge, "'.lower() == 'true' and ", is_base])
     iphone_on_base             = PythonExpression(
@@ -166,6 +169,21 @@ def generate_launch_description() -> LaunchDescription:
         ],
         output='screen',
         condition=IfCondition(realsense_apriltag_on_dog),
+    )
+
+    # ── Dog odometry relay → TF (odom → base_link) ──────────────────────────
+    # Receives the dog's /leg_odom2 pose as JSON over UDP :9870 (the Foxy↔Jazzy
+    # bridge) and broadcasts it as TF. dog-group only (runs on the NUC that
+    # receives the dog's packets). SAFE ONLY on ROS_DOMAIN_ID=42: this publishes
+    # /tf over DDS, which crashes the dog's Foxy stack if it can see it (domain 0
+    # on the dog's subnet). Domain 42 isolates them.
+    odom_relay_receiver = Node(
+        package='ar_explorer',
+        executable='odom_relay_receiver',
+        name='odom_relay_receiver',
+        parameters=[{'port': 9870}],
+        output='screen',
+        condition=IfCondition(odom_relay_on_dog),
     )
 
     # ── iPhone camera bridge (ns=iphone, name=iphone → /iphone/iphone/...) ──
@@ -262,6 +280,7 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('apriltag',    default_value='true'),
         DeclareLaunchArgument('rosbridge',   default_value='true'),
         DeclareLaunchArgument('calibration', default_value='true'),
+        DeclareLaunchArgument('odom_relay',  default_value='true'),
 
         LogInfo(msg=['AR Explorer launching — machine=', machine,
                      ', realsense=', realsense,
@@ -272,6 +291,7 @@ def generate_launch_description() -> LaunchDescription:
 
         realsense_camera,
         apriltag_realsense,
+        odom_relay_receiver,
 
         iphone_bridge,
         apriltag_iphone,
