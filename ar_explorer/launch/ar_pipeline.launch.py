@@ -186,6 +186,27 @@ def generate_launch_description() -> LaunchDescription:
         condition=IfCondition(odom_relay_on_dog),
     )
 
+    # ── Static mount: base_link → camera_link (RealSense on the dog) ─────────
+    # Completes the TF chain odom → base_link → camera_link → (RS driver) →
+    # camera_color_optical_frame so RealSense detections resolve into odom/world.
+    # TODO(mount): identity PLACEHOLDER — camera_link is assumed to coincide with
+    # base_link. Replace --x/--y/--z (and the quaternion) with the measured
+    # offset of the RealSense on the dog, then re-run odom_world_calibrator.
+    # NOTE: --child-frame-id must match the RealSense driver's root frame; verify
+    # with `ros2 run tf2_tools view_frames` (expected 'camera_link').
+    base_link_to_camera = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='base_link_to_camera',
+        arguments=[
+            '--x', '0', '--y', '0', '--z', '0',
+            '--qx', '0', '--qy', '0', '--qz', '0', '--qw', '1',
+            '--frame-id', 'base_link', '--child-frame-id', 'camera_link',
+        ],
+        output='screen',
+        condition=IfCondition(is_dog),
+    )
+
     # ── iPhone camera bridge (ns=iphone, name=iphone → /iphone/iphone/...) ──
     iphone_bridge = Node(
         package='ar_explorer',
@@ -292,6 +313,7 @@ def generate_launch_description() -> LaunchDescription:
         realsense_camera,
         apriltag_realsense,
         odom_relay_receiver,
+        base_link_to_camera,
 
         iphone_bridge,
         apriltag_iphone,
